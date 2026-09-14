@@ -66,7 +66,8 @@
     </div>
     <div class="card" style="margin-top:20px">
       <h2>Search knowledge blocks</h2>
-      <input type="text" id="q" placeholder="e.g. incubation, placements, a person's name…">
+      <input type="text" id="q" placeholder="ask in plain words: who spoke about placements?">
+      <div style="display:flex;gap:10px;font-size:12px;color:var(--muted);margin:-2px 0 6px"><label><input type="radio" name="mode" value="hybrid" checked> hybrid</label><label><input type="radio" name="mode" value="vector"> semantic</label><label><input type="radio" name="mode" value="keyword"> keyword</label></div>
       <div id="hits"></div>
     </div>
     <div class="jobs" id="jobs"></div>
@@ -125,10 +126,10 @@ $('#go').onclick=async()=>{const fd=new FormData();const url=$('#url').value.tri
  $('#go').disabled=true;msg(pickedFile?'Uploading…':'Submitting…');
  try{const r=await fetch('/api/v1/analyze',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw new Error(d.detail||r.statusText);msg('Job '+d.job_id+' queued.');setFile(null);fileIn.value='';$('#url').value='';$('#path').value='';await refresh();select(d.job_id);}
  catch(e){msg(e.message,1)}finally{$('#go').disabled=false}};
-let qTimer=null;$('#q').addEventListener('input',()=>{clearTimeout(qTimer);qTimer=setTimeout(runSearch,300)});
+let qTimer=null;$('#q').addEventListener('input',()=>{clearTimeout(qTimer);qTimer=setTimeout(runSearch,300)});document.querySelectorAll('input[name=mode]').forEach(r=>r.onchange=runSearch);
 async function runSearch(){const q=$('#q').value.trim();const el=$('#hits');if(q.length<2){el.innerHTML='';return}
- try{const hits=await api('/search?q='+encodeURIComponent(q)+'&limit=8');
-  el.innerHTML=hits.length?hits.map(h=>`<div class="hit" data-job="${h.job_id}"><span class="ty">${h.block_type}</span> ${h.timestamp?'<span class="ts">'+esc(h.timestamp)+'</span>':''} ${esc(h.text.slice(0,140))}<div class="src">${esc(h.source_name)}</div></div>`).join(''):'<div class="m" style="color:var(--muted);font-size:12px;margin-top:6px">no matches</div>';
+ try{const mode=document.querySelector('input[name=mode]:checked').value;const hits=await api('/search?q='+encodeURIComponent(q)+'&mode='+mode+'&limit=8');
+  el.innerHTML=hits.length?hits.map(h=>`<div class="hit" data-job="${h.job_id}"><span class="ty">${h.block_type}</span> ${h.timestamp?'<span class="ts">'+esc(h.timestamp)+'</span>':''} ${esc(h.text.slice(0,140))}<div class="src">${esc(h.source_name)} · ${(h.matched_by||[]).join('+')}</div></div>`).join(''):'<div class="m" style="color:var(--muted);font-size:12px;margin-top:6px">no matches</div>';
   el.querySelectorAll('.hit').forEach(n=>n.onclick=()=>select(n.dataset.job));}
  catch(e){el.innerHTML='<div class="msg err">'+esc(e.message)+'</div>'}}
 function msg(t,err){const m=$('#msg');m.textContent=t;m.className='msg'+(err?' err':'')}

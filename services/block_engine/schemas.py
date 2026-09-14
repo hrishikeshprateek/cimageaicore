@@ -133,6 +133,37 @@ class PeoplePassV1(BaseModel):
     people: list[PersonBlock]
 
 
+def normalise_timestamps(a: "VideoAnalysisV1") -> list[str]:
+    """Rewrite MM:SS / H:MM:SS style stamps as HH:MM:SS in place. Returns the stamps it could not parse."""
+    from services.block_engine.media import seconds_to_ts, ts_to_seconds
+
+    bad: list[str] = []
+
+    def fix(ts: str | None) -> str | None:
+        if ts is None:
+            return None
+        secs = ts_to_seconds(ts)
+        if secs is None:
+            bad.append(ts)
+            return ts
+        return seconds_to_ts(secs)
+
+    a.video.observed_duration = fix(a.video.observed_duration)
+    for p in a.people:
+        p.timestamps = [fix(t) for t in p.timestamps]
+    for t in a.transcript:
+        t.start_time, t.end_time = fix(t.start_time), fix(t.end_time)
+    for t in a.topics:
+        t.timestamps = [fix(x) for x in t.timestamps]
+    for k in a.key_moments:
+        k.timestamp = fix(k.timestamp)
+    for q in a.quotes:
+        q.timestamp = fix(q.timestamp)
+    for m in a.media:
+        m.timestamp = fix(m.timestamp)
+    return bad
+
+
 # --------------------------------------------------------------------------
 # Provenance wrapper (what we persist)
 # --------------------------------------------------------------------------
@@ -185,7 +216,8 @@ class Block(BaseModel):
 
 class SearchHit(Block):
     media_id: str | None = None
-    rank: float = 0.0
+    rank: float = 0.0                      # fused score (higher is better)
+    matched_by: list[str] = Field(default_factory=list)   # "keyword", "vector"
 
 
 def flatten_blocks(result: AnalysisResult) -> list[Block]:

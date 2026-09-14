@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from services.ai_gateway.base import AIProvider, ExtraPass, RawModelOutput, StageCallback, VideoAnalysisRequest, sum_usage
 from services.block_engine.media import ts_to_seconds
-from services.block_engine.schemas import AnalysisResult, PeoplePassV1, PersonBlock, UsageInfo, VideoAnalysisV1, provider_json_schema
+from services.block_engine.schemas import AnalysisResult, PeoplePassV1, PersonBlock, UsageInfo, VideoAnalysisV1, normalise_timestamps, provider_json_schema
 from services.block_engine.sources import VideoSource
 
 log = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ class BlockEngine:
                 analysis, repaired, used = analysis2, repaired or repaired2, used2
             else:
                 used.usage = used2.usage
+        unparsable = normalise_timestamps(analysis)
         on_stage("BLOCKS_PARTIAL", {"repaired": repaired, "counts": analysis.block_counts(), "note": "validated, persisting"})
 
         return AnalysisResult(
@@ -105,7 +106,7 @@ class BlockEngine:
             processing_seconds=round(time.monotonic() - started, 2),
             usage=UsageInfo(**{k: v for k, v in used.usage.items() if k in UsageInfo.model_fields}),
             repaired=repaired,
-            warnings=self._warnings(analysis, source),
+            warnings=self._warnings(analysis, source) + ([f"{len(unparsable)} unparsable timestamp(s), e.g. {unparsable[0]!r}"] if unparsable else []),
             block_counts=analysis.block_counts(),
             analysis=analysis,
         )

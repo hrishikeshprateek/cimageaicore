@@ -92,8 +92,8 @@ GPU optional for the Gemini-first design.
 - [x] Validated structured blocks produced (verified on a real CIMAGE video, 2026-09-14)
 - [~] Partial results stored before the job completes (BLOCKS_PARTIAL state; true streaming of partial blocks pending)
 - [x] All blocks carry source references / timestamps
-- [~] PostgreSQL stores metadata ✅ · pgvector embeddings pending (V0.3)
-- [ ] Semantic search over blocks
+- [x] PostgreSQL stores metadata, pgvector stores embeddings
+- [x] Semantic search over blocks (hybrid, cross-lingual)
 - [x] Failed jobs retry without duplicates (sha256/url dedupe; failed → retry on same media row)
 - [x] Every step observable in dashboard/logs (stage timeline + audit_log)
 - [x] No secret reaches the browser
@@ -109,8 +109,8 @@ GPU optional for the Gemini-first design.
 8. Job queue + video worker (Redis)
 9. Progressive job states + persistence ✅ (Postgres, JSON fallback)
 10. NAS watcher against /AI-Test only
-11. Embeddings + pgvector retrieval
-12. Block/search UI ✅ keyword (FTS) — vector/hybrid pending step 11
+11. Embeddings + pgvector retrieval ✅ (003_embeddings; Gemini Embedding 2; EMBEDDING→INDEXED; hybrid RRF search)
+12. Block/search UI ✅ hybrid / semantic / keyword modes
 13. Permitted online-video source adapter ✅ (YouTube URL → Gemini)
 14. Content-opportunity generation
 15. Blog Agent

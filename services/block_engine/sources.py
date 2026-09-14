@@ -12,7 +12,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from services.ai_gateway.base import VideoInput
 from services.block_engine.media import probe_duration_seconds, sha256_of
@@ -102,9 +102,32 @@ def from_path(raw_path: str, allowed_roots: list[Path], stable_seconds: float) -
     return VideoSource(info=_describe_file(resolved, "nas_file"), path=resolved)
 
 
-def from_url(raw_url: str) -> VideoSource:
-    url = raw_url.strip()
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() not in YOUTUBE_HOSTS:
+_YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def canonical_youtube_url(raw_url: str) -> str:
+    """youtu.be/<id>, /shorts/<id>, /live/<id>, /embed/<id>, watch?v=<id>&list=... -> https://www.youtube.com/watch?v=<id>
+
+    Playlist/radio parameters make Gemini reject the URL (403), and one video reachable through
+    several URL forms would otherwise be analysed several times."""
+    parsed = urlparse(raw_url.strip())
+    host = parsed.netloc.lower()
+    if parsed.scheme not in {"http", "https"} or host not in YOUTUBE_HOSTS:
         raise SourceError("only public YouTube URLs are supported as online sources in this version")
+    video_id = None
+    if host == "youtu.be":
+        video_id = parsed.path.strip("/").split("/")[0]
+    elif parsed.path == "/watch":
+        video_id = (parse_qs(parsed.query).get("v") or [None])[0]
+    else:
+        parts = [x for x in parsed.path.split("/") if x]
+        if len(parts) >= 2 and parts[0] in {"shorts", "live", "embed", "v"}:
+            video_id = parts[1]
+    if not video_id or not _YT_ID.match(video_id):
+        raise SourceError("could not find a YouTube video id in that URL (playlist and channel URLs are not supported)")
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def from_url(raw_url: str) -> VideoSource:
+    url = canonical_youtube_url(raw_url)
     return VideoSource(info=SourceInfo(kind="online", name=url, url=url, mime_type="video/*"), url=url)

@@ -13,6 +13,7 @@ from apps.api.config import REPO_ROOT, get_settings
 from apps.api.jobs import JobRunner, JsonJobStore
 from apps.api.routes import router
 from services.ai_gateway import build_provider
+from services.ai_gateway.embeddings import build_embedder
 from services.block_engine.engine import BlockEngine
 
 WEB_DIR = REPO_ROOT / "web"
@@ -29,13 +30,15 @@ async def lifespan(app: FastAPI):
     engine = BlockEngine(provider, prompt_version=settings.prompt_version, institution_context=settings.institution_context, known_people_file=settings.known_people_file, people_pass_version=settings.people_pass_version or None)
     store = _build_store(settings)
     loaded = store.load()
-    runner = JobRunner(store, settings.worker_threads)
+    embedder = build_embedder(settings)
+    runner = JobRunner(store, settings.worker_threads, embedder=embedder)
 
     app.state.settings = settings
     app.state.engine = engine
     app.state.store = store
     app.state.runner = runner
-    log.info("provider=%s model=%s store=%s jobs_loaded=%d data_dir=%s", provider.name, provider.model, store.kind, loaded, settings.data_dir)
+    app.state.embedder = embedder
+    log.info("provider=%s model=%s embedder=%s/%s store=%s jobs_loaded=%d data_dir=%s", provider.name, provider.model, embedder.name, embedder.model, store.kind, loaded, settings.data_dir)
     try:
         yield
     finally:

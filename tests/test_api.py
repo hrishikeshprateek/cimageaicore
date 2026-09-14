@@ -73,3 +73,33 @@ def test_duplicate_upload_returns_existing_job(app_env, tiny_video: Path):
         assert len(client.get("/api/v1/jobs").json()) == 1
         hits = client.get("/api/v1/search", params={"q": "placeholder"}).json()
         assert hits and hits[0]["job_id"] == first["job_id"]
+
+
+def test_search_modes_on_json_store_fall_back_to_keyword(app_env, tiny_video: Path):
+    from apps.api.main import create_app
+
+    with TestClient(create_app()) as client:
+        sysinfo = client.get("/api/v1/system").json()
+        assert sysinfo["vectors"] is False and sysinfo["embedder"] == "mock"
+        with tiny_video.open("rb") as f:
+            job_id = client.post("/api/v1/analyze", files={"file": (tiny_video.name, f, "video/mp4")}).json()["job_id"]
+        job = _wait(client, job_id)
+        assert job["state"] == "BLOCKS_COMPLETE"  # no INDEXED without vectors
+        for mode in ("hybrid", "keyword", "vector"):
+            hits = client.get("/api/v1/search", params={"q": "placeholder", "mode": mode}).json()
+            assert hits and hits[0]["matched_by"] == ["keyword"]
+        assert client.get("/api/v1/search", params={"q": "placeholder", "mode": "bogus"}).status_code == 400
+
+
+def test_youtube_urls_are_canonicalised():
+    from services.block_engine.sources import SourceError, canonical_youtube_url
+    import pytest
+
+    want = "https://www.youtube.com/watch?v=jZlzKdq0StM"
+    for raw in ("https://www.youtube.com/watch?v=jZlzKdq0StM&list=RDjZlzKdq0StM&start_radio=1",
+                "https://youtu.be/jZlzKdq0StM?si=abc", "https://m.youtube.com/shorts/jZlzKdq0StM",
+                "https://www.youtube.com/live/jZlzKdq0StM?feature=share"):
+        assert canonical_youtube_url(raw) == want
+    for bad in ("https://www.youtube.com/playlist?list=PL123", "https://www.youtube.com/@cimagepatna", "https://vimeo.com/123"):
+        with pytest.raises(SourceError):
+            canonical_youtube_url(bad)

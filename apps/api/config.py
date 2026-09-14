@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     gemini_upload_timeout_seconds: float = 600   # per upload chunk
     gemini_poll_timeout_seconds: float = 30      # status polls / deletes
 
+    # embeddings (V0.3)
+    embedding_provider: Literal["auto", "gemini", "mock"] = "auto"
+    embedding_model: str = "gemini-embedding-2"
+    embedding_dimensions: int = 768          # must match database/migrations/003_embeddings.sql
+    embedding_batch_size: int = 32
+
     data_dir: Path = REPO_ROOT / "data"
     nas_allowed_roots: str = "./data/nas-test"
     stable_seconds: float = 2.0

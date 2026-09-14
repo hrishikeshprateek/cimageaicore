@@ -27,6 +27,11 @@ def system(request: Request) -> dict:
         "provider": engine.provider.name,
         "model": engine.provider.model,
         "store": request.app.state.store.kind,
+        "embedder": request.app.state.embedder.name,
+        "embedding_model": request.app.state.embedder.model,
+        "embedding_dimensions": request.app.state.embedder.dimensions,
+        "vectors": request.app.state.store.supports_vectors,
+        "embeddings": request.app.state.store.embedding_stats(),
         "prompt_version": s.prompt_version,
         "ffprobe": ffprobe_available(),
         "allowed_roots": [str(r) for r in s.allowed_roots],
@@ -103,12 +108,25 @@ def get_blocks(request: Request, job_id: str, block_type: str | None = None) -> 
 
 
 @router.get("/search")
-def search(request: Request, q: str, block_type: str | None = None, limit: int = 20) -> list[SearchHit]:
-    """Keyword search across all stored knowledge blocks (vector/hybrid search arrives in V0.3)."""
+def search(
+    request: Request,
+    q: str,
+    block_type: str | None = None,
+    media_id: str | None = None,
+    mode: str = "hybrid",
+    limit: int = 20,
+) -> list[SearchHit]:
+    """Search knowledge blocks. mode = hybrid (default: keyword + vector, rank-fused) | keyword | vector."""
     q = q.strip()
     if len(q) < 2:
         raise HTTPException(400, "q must be at least 2 characters")
-    return request.app.state.store.search(q, block_type, min(max(limit, 1), 100))
+    if mode not in ("hybrid", "keyword", "vector"):
+        raise HTTPException(400, "mode must be hybrid, keyword or vector")
+    store = request.app.state.store
+    qvec = None
+    if mode != "keyword" and store.supports_vectors:
+        qvec = request.app.state.embedder.embed_query(q)
+    return store.search(q, block_type, min(max(limit, 1), 100), query_vector=qvec, media_id=media_id, mode=mode)
 
 
 def _job_or_404(request: Request, job_id: str) -> Job:

@@ -88,3 +88,36 @@ def test_restart_marks_active_jobs_failed(store, tiny_video):
     store.transition(job.id, JobState.ANALYZING)
     store.load()
     assert store.get(job.id).state == JobState.FAILED and store.get(job.id).error == "interrupted by restart"
+
+
+def test_vector_and_hybrid_search(store, tiny_video):
+    from apps.api.jobs import embed_job_blocks
+    from services.ai_gateway.embeddings import MockEmbedder
+
+    job = store.create(from_upload(tiny_video).info, "mock", "mock-v1")
+    _analyse(store, tiny_video, job)
+    assert store.embedding_stats()["pending"] > 0
+    emb = MockEmbedder(dimensions=768)
+    n = embed_job_blocks(store, emb, job.id)
+    stats = store.embedding_stats()
+    assert n == stats["total"] and stats["pending"] == 0
+    assert store.pending_embeddings(job.id) == []
+
+    qv = emb.embed_query("placeholder quote")
+    vec_hits = store.search("placeholder quote", query_vector=qv, mode="vector", limit=5)
+    assert vec_hits and all(h.matched_by == ["vector"] for h in vec_hits)
+    hyb = store.search("placeholder quote", query_vector=qv, mode="hybrid", limit=5)
+    assert hyb and "keyword" in hyb[0].matched_by and "vector" in hyb[0].matched_by  # top hit agreed by both
+    assert hyb[0].block_type == "quote"
+    only_tx = store.search("placeholder", query_vector=emb.embed_query("placeholder"), block_type="transcript")
+    assert only_tx and all(h.block_type == "transcript" for h in only_tx)
+    other_media = store.search("placeholder", query_vector=qv, media_id="nope")
+    assert other_media == []
+
+
+def test_restart_reverts_interrupted_embedding_to_blocks_complete(store, tiny_video):
+    job = store.create(from_upload(tiny_video).info, "mock", "mock-v1")
+    _analyse(store, tiny_video, job)
+    store.transition(job.id, JobState.EMBEDDING)
+    store.load()
+    assert store.get(job.id).state == JobState.BLOCKS_COMPLETE and store.get(job.id).error is None

@@ -78,6 +78,7 @@ class JsonJobStore:
     """
 
     kind = "json"
+    supports_vectors = False
 
     def __init__(self, jobs_dir: Path, analyses_dir: Path):
         self.jobs_dir = jobs_dir
@@ -168,14 +169,25 @@ class JsonJobStore:
                 return job
         return None
 
-    def search(self, q: str, block_type: str | None = None, limit: int = 20) -> list[SearchHit]:
+    def search(self, q: str, block_type: str | None = None, limit: int = 20, *, query_vector=None, media_id: str | None = None, mode: str = "hybrid") -> list[SearchHit]:
         needle = q.lower().strip()
         hits: list[SearchHit] = []
         for job in self.list():
+            if media_id and job.media_id != media_id:
+                continue
             for b in self.blocks(job.id, block_type):
                 if needle and needle in b.text.lower():
-                    hits.append(SearchHit(**b.model_dump(), media_id=job.media_id, rank=1.0))
+                    hits.append(SearchHit(**b.model_dump(), media_id=job.media_id, rank=1.0, matched_by=["keyword"]))
         return hits[:limit]
+
+    def pending_embeddings(self, job_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        return []
+
+    def set_embeddings(self, rows, model: str) -> int:
+        return 0
+
+    def embedding_stats(self) -> dict[str, int]:
+        return {"total": 0, "embedded": 0, "pending": 0}
 
     def audit(self, actor: str, action: str, entity_type: str | None = None, entity_id: str | None = None, detail: dict[str, Any] | None = None) -> None:
         log.info("audit %s %s %s/%s %s", actor, action, entity_type, entity_id, detail or {})
@@ -187,11 +199,23 @@ class JsonJobStore:
         (self.jobs_dir / f"{job.id}.json").write_text(job.model_dump_json(indent=2), encoding="utf-8")
 
 
+def embed_job_blocks(store, embedder, job_id: str) -> int:
+    """Embed every block of a job that has no vector yet. Returns the number embedded."""
+    total = 0
+    while True:
+        pending = store.pending_embeddings(job_id, limit=200)
+        if not pending:
+            return total
+        vectors = embedder.embed_documents([(r["title"], r["text"]) for r in pending])
+        total += store.set_embeddings([(r["id"], v) for r, v in zip(pending, vectors)], embedder.model)
+
+
 class JobRunner:
     """Tiny in-process queue (thread pool). Stands in for Redis + workers until Phase 2."""
 
-    def __init__(self, store, worker_threads: int = 2):
+    def __init__(self, store, worker_threads: int = 2, embedder=None):
         self.store = store
+        self.embedder = embedder
         self.pool = ThreadPoolExecutor(max_workers=worker_threads, thread_name_prefix="video-worker")
 
     def submit(self, job_id: str, work: Callable[[Callable[[str, dict[str, Any]], None]], AnalysisResult]) -> None:
@@ -209,6 +233,16 @@ class JobRunner:
             except Exception as exc:  # noqa: BLE001 - any failure must land in the job record
                 log.exception("job %s failed", job_id)
                 self.store.fail(job_id, f"{type(exc).__name__}: {exc}")
+                return
+            if self.embedder is None or not getattr(self.store, "supports_vectors", False):
+                return
+            try:  # blocks are safe already; an embedding failure is recoverable via scripts/embed_backfill.py
+                self.store.transition(job_id, JobState.EMBEDDING, {"model": self.embedder.model})
+                n = embed_job_blocks(self.store, self.embedder, job_id)
+                self.store.transition(job_id, JobState.INDEXED, {"embedded": n, "model": self.embedder.model})
+            except Exception as exc:  # noqa: BLE001
+                log.exception("job %s embedding failed", job_id)
+                self.store.transition(job_id, JobState.BLOCKS_COMPLETE, {"embedding_error": f"{type(exc).__name__}: {exc}"})
 
         self.pool.submit(run)
 

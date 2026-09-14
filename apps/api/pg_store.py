@@ -51,17 +51,34 @@ def _row_to_job(r: dict[str, Any]) -> Job:
     )
 
 
+def _vec_literal(v: list[float]) -> str:
+    return "[" + ",".join(f"{x:.7f}" for x in v) + "]"
+
+
+def _rrf(*ranked: list[str], k: int = 60) -> dict[str, float]:
+    """Reciprocal-rank fusion of several ranked id lists."""
+    score: dict[str, float] = {}
+    for lst in ranked:
+        for i, bid in enumerate(lst):
+            score[bid] = score.get(bid, 0.0) + 1.0 / (k + i + 1)
+    return score
+
+
 class PostgresJobStore:
     kind = "postgres"
+    supports_vectors = True
 
     def __init__(self, pool: ConnectionPool):
         self.pool = pool
 
     # ---------------------------------------------------------------- lifecycle
     def load(self) -> int:
-        """Jobs left active by a previous process cannot resume in V0.2 -> mark FAILED."""
+        """Jobs left mid-flight by a previous process: analysis cannot resume -> FAILED;
+        an interrupted embedding step keeps its blocks -> back to BLOCKS_COMPLETE (backfill re-embeds)."""
         with self.pool.connection() as conn:
-            active = [JobState(s) for s in JobState if s not in (JobState.BLOCKS_COMPLETE, JobState.INDEXED, JobState.CONTENT_CANDIDATE, JobState.FAILED)]
+            for r in conn.execute("SELECT id FROM processing_jobs WHERE state = 'EMBEDDING'").fetchall():
+                self._transition(conn, r["id"], JobState.BLOCKS_COMPLETE, {"reason": "embedding interrupted by restart"})
+            active = [JobState(s) for s in JobState if s not in (JobState.BLOCKS_COMPLETE, JobState.INDEXED, JobState.CONTENT_CANDIDATE, JobState.FAILED, JobState.EMBEDDING)]
             rows = conn.execute("SELECT id FROM processing_jobs WHERE state = ANY(%s)", ([s.value for s in active],)).fetchall()
             for r in rows:
                 self._transition(conn, r["id"], JobState.FAILED, {"reason": "interrupted by restart"}, error="interrupted by restart")
@@ -190,19 +207,89 @@ class PostgresJobStore:
             rows = conn.execute(sql + " ORDER BY b.block_type, b.ordinal", params).fetchall()
             return [self._row_to_block(r) for r in rows]
 
-    def search(self, q: str, block_type: str | None = None, limit: int = 20) -> list[SearchHit]:
-        """Keyword search (Postgres full-text). V0.3 adds vector similarity for a hybrid ranking."""
+    def search(
+        self,
+        q: str,
+        block_type: str | None = None,
+        limit: int = 20,
+        *,
+        query_vector: list[float] | None = None,
+        media_id: str | None = None,
+        mode: str = "hybrid",
+    ) -> list[SearchHit]:
+        """keyword = Postgres full-text; vector = pgvector cosine; hybrid = reciprocal-rank fusion of both."""
+        use_kw = mode in ("hybrid", "keyword")
+        use_vec = mode in ("hybrid", "vector") and query_vector is not None
+        if not use_kw and not use_vec:
+            use_kw = True
+        pool_n = max(limit * 3, 30)
+        kw_ids: list[str] = []
+        vec_ids: list[str] = []
+        rows_by_id: dict[str, dict[str, Any]] = {}
+
+        filters, params = "", []
+        if block_type:
+            filters += " AND b.block_type = %s"; params.append(block_type)
+        if media_id:
+            filters += " AND b.media_id = %s"; params.append(media_id)
+
         with self.pool.connection() as conn:
-            sql = """SELECT b.*, m.name AS source_name,
-                            ts_rank(to_tsvector('simple', b.text), plainto_tsquery('simple', %s)) AS rank
-                     FROM knowledge_blocks b JOIN media m ON m.id = b.media_id
-                     WHERE to_tsvector('simple', b.text) @@ plainto_tsquery('simple', %s)"""
-            params: list[Any] = [q, q]
-            if block_type:
-                sql += " AND b.block_type = %s"
-                params.append(block_type)
-            rows = conn.execute(sql + " ORDER BY rank DESC, b.created_at DESC LIMIT %s", [*params, limit]).fetchall()
-            return [SearchHit(**self._row_to_block(r).model_dump(), media_id=r["media_id"], rank=float(r["rank"])) for r in rows]
+            if use_kw:
+                rows = conn.execute(
+                    f"""SELECT b.*, m.name AS source_name
+                        FROM knowledge_blocks b JOIN media m ON m.id = b.media_id
+                        WHERE to_tsvector('simple', b.text) @@ plainto_tsquery('simple', %s){filters}
+                        ORDER BY ts_rank(to_tsvector('simple', b.text), plainto_tsquery('simple', %s)) DESC, b.created_at DESC
+                        LIMIT %s""",
+                    [q, *params, q, pool_n],
+                ).fetchall()
+                for r in rows:
+                    kw_ids.append(r["id"]); rows_by_id[r["id"]] = r
+            if use_vec:
+                rows = conn.execute(
+                    f"""SELECT b.*, m.name AS source_name, 1 - (b.embedding <=> %s::vector) AS similarity
+                        FROM knowledge_blocks b JOIN media m ON m.id = b.media_id
+                        WHERE b.embedding IS NOT NULL{filters}
+                        ORDER BY b.embedding <=> %s::vector
+                        LIMIT %s""",
+                    [_vec_literal(query_vector), *params, _vec_literal(query_vector), pool_n],
+                ).fetchall()
+                for r in rows:
+                    vec_ids.append(r["id"]); rows_by_id.setdefault(r["id"], r)
+
+        fused = _rrf(kw_ids, vec_ids)
+        ordered = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+        hits: list[SearchHit] = []
+        for bid, score in ordered:
+            r = rows_by_id[bid]
+            matched = (["keyword"] if bid in kw_ids else []) + (["vector"] if bid in vec_ids else [])
+            hits.append(SearchHit(**self._row_to_block(r).model_dump(), media_id=r["media_id"], rank=round(score, 5), matched_by=matched))
+        return hits
+
+    # ---------------------------------------------------------------- embeddings
+    def pending_embeddings(self, job_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        """Blocks without a vector: id, block_type, text and the video title (used as the document title)."""
+        with self.pool.connection() as conn:
+            sql = """SELECT b.id, b.block_type, b.text, COALESCE(j.result->'analysis'->'video'->>'title', m.name) AS title
+                     FROM knowledge_blocks b JOIN processing_jobs j ON j.id = b.job_id JOIN media m ON m.id = b.media_id
+                     WHERE b.embedding IS NULL"""
+            params: list[Any] = []
+            if job_id:
+                sql += " AND b.job_id = %s"; params.append(job_id)
+            return conn.execute(sql + " ORDER BY b.created_at LIMIT %s", [*params, limit]).fetchall()
+
+    def set_embeddings(self, rows: list[tuple[str, list[float]]], model: str) -> int:
+        with self.pool.connection() as conn, conn.transaction(), conn.cursor() as cur:
+            cur.executemany(
+                "UPDATE knowledge_blocks SET embedding = %s::vector, embedding_model = %s, embedded_at = %s WHERE id = %s",
+                [(_vec_literal(v), model, _now(), bid) for bid, v in rows],
+            )
+            return len(rows)
+
+    def embedding_stats(self) -> dict[str, int]:
+        with self.pool.connection() as conn:
+            r = conn.execute("SELECT count(*) AS total, count(embedding) AS embedded FROM knowledge_blocks").fetchone()
+            return {"total": r["total"], "embedded": r["embedded"], "pending": r["total"] - r["embedded"]}
 
     @staticmethod
     def _row_to_block(r: dict[str, Any]) -> Block:

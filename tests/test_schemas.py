@@ -39,3 +39,18 @@ def test_schema_1_1_is_backward_compatible_and_gemini_safe():
     assert prop["type"] == ["string", "null"] and "recognised" in prop["enum"] and "default" not in prop
     assert "identified_by" not in s["properties"]["people"]["items"]["required"]
     assert PersonBlock(name="x", role=None, context="c", timestamps=[], identified_by="recognised", confidence=0.7).identified_by == "recognised"
+
+
+def test_timestamps_are_normalised_to_hhmmss():
+    from services.block_engine.schemas import normalise_timestamps
+
+    a = VideoAnalysisV1.model_validate({
+        "video": {"title": "t", "video_type": "other", "language": "en", "description": "d", "observed_duration": "4:35"},
+        "events": [], "people": [{"name": "x", "role": None, "context": "c", "timestamps": ["1:02:03", "35"], "identified_by": None, "confidence": 0.5}],
+        "transcript": [{"speaker": "s", "start_time": "0:00", "end_time": "12:34", "text": "t", "language": "en"}],
+        "topics": [], "key_moments": [{"timestamp": "02:58", "description": "d", "importance": "low"}],
+        "quotes": [], "media": [], "summary": {"short_summary": "s", "detailed_summary": "d", "key_points": []}, "content_opportunities": [],
+    })
+    bad = normalise_timestamps(a)
+    assert a.video.observed_duration == "00:04:35" and a.transcript[0].end_time == "00:12:34" and a.key_moments[0].timestamp == "00:02:58"
+    assert a.people[0].timestamps[0] == "01:02:03" and bad == ["35"]

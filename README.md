@@ -4,7 +4,7 @@ Event-driven AI media system for CIMAGE: watch the NAS, turn videos/documents in
 structured **knowledge blocks**, store them in PostgreSQL + pgvector, and (later) draft
 blogs/social posts for human approval and WordPress publishing.
 
-**Current milestone: V0.2 — Video → Gemini → validated knowledge blocks → PostgreSQL (+ keyword search).**
+**Current milestone: V0.3 — Video → Gemini → knowledge blocks → PostgreSQL + pgvector, hybrid (keyword + semantic) search.**
 See [docs/BUILD_SPEC.md](docs/BUILD_SPEC.md) for the full architecture and build order.
 
 ## Quick start (development, MacBook)
@@ -36,14 +36,14 @@ clearly labelled `[MOCK]`) so the pipeline can be exercised offline.
 | `GET` | `/api/v1/jobs/{id}` | job state, stage timeline, counts, usage |
 | `GET` | `/api/v1/jobs/{id}/result` | full `AnalysisResult` (structured blocks + provenance) |
 | `GET` | `/api/v1/jobs/{id}/blocks?block_type=quote` | flattened block rows (future `knowledge_blocks` table) |
-| `GET` | `/api/v1/search?q=…&block_type=quote` | keyword search over all stored blocks (hybrid vector search in V0.3) |
+| `GET` | `/api/v1/search?q=…&mode=hybrid\|keyword\|vector&block_type=&media_id=` | hybrid search: Postgres full-text + pgvector cosine, reciprocal-rank fused; each hit says what matched it |
 | `GET` | `/api/v1/system` | provider/model/store/config in use |
 
 Submitting the same bytes (sha256) or the same URL twice returns the existing job (`deduplicated: true`)
 unless the earlier attempt failed, in which case a retry job is created against the same `media` row.
 
-Job states: `RECEIVED → STABLE → QUEUED → UPLOADED → ANALYZING → BLOCKS_PARTIAL → BLOCKS_COMPLETE` (or `FAILED`).
-`EMBEDDING / INDEXED / CONTENT_CANDIDATE` are reserved for later phases.
+Job states: `RECEIVED → STABLE → QUEUED → UPLOADED → ANALYZING (main) → ANALYZING (people) → BLOCKS_PARTIAL → BLOCKS_COMPLETE → EMBEDDING → INDEXED` (or `FAILED`).
+An embedding failure leaves the job at `BLOCKS_COMPLETE` (blocks are safe); `python scripts/embed_backfill.py` finishes it.
 
 ## Layout
 
@@ -56,7 +56,8 @@ web/                single-page UI
 tests/              pytest (mock provider, schema, API)
 docker/, docker-compose.yml   api + pgvector + redis (postgres/redis used from Phase 3)
 database/migrations 001_init (pgvector), 002_core (media, processing_jobs, knowledge_blocks, audit_log)
-scripts/            analyze.py (benchmark CLI), migrate.py, import_analysis.py (backfill JSON → Postgres)
+scripts/            analyze.py (benchmark CLI), migrate.py, import_analysis.py, embed_backfill.py
+services/ai_gateway/embeddings.py   Gemini Embedding 2 (768-d, per-text via Content wrapping) or mock
 data/               uploads/, jobs/, analyses/, nas-test/   (git-ignored)
 ```
 
@@ -77,6 +78,13 @@ data/               uploads/, jobs/, analyses/, nas-test/   (git-ignored)
 - Timeouts are per call type: analysis 1800 s, upload chunk 600 s, status polls 30 s with retries (a dropped poll must never hang a job).
 
 Benchmark any combination with `python scripts/analyze.py <video> --model … --thinking … --resolution … --fps …`.
+
+## Embeddings (V0.3)
+
+`gemini-embedding-2` at 768 dimensions (documents as `title: … | text: …`, queries as `task: search result | query: …`),
+stored in `knowledge_blocks.embedding` with an HNSW cosine index. Free tier: 100 RPM / 1K RPD; paid $0.20 per 1M tokens
+(a whole video's blocks ≈ 2–5k tokens). Cross-lingual: Hindi queries find English blocks. YouTube URLs are canonicalised
+to `watch?v=<id>` (playlist/radio parameters make Gemini return 403).
 
 ## Tests
 
