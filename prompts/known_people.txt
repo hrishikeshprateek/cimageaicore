@@ -1,0 +1,3 @@
+# Known people at the institution - one per line: Name — Role
+# The model may identify ONLY these people by recognition (without an on-screen name); everyone else must be named on screen or spoken.
+Neeraj Agrawal — Director, CIMAGE Group of Institutions

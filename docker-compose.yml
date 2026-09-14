@@ -1,0 +1,38 @@
+# Phase 1 foundation: API + PostgreSQL/pgvector + Redis.
+# V0.1 only needs the API; postgres/redis are wired for Phase 2-3.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      NAS_ALLOWED_ROOTS: /nas
+      DATABASE_URL: postgresql://cimage:cimage@postgres:5432/cimage_ai
+      REDIS_URL: redis://redis:6379/0
+    ports: ["8000:8000"]
+    volumes:
+      - ./data:/data
+      - ./data/nas-test:/nas:ro      # later: the real NAS mount (read-only)
+    depends_on: [postgres, redis]
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: cimage
+      POSTGRES_PASSWORD: cimage
+      POSTGRES_DB: cimage_ai
+    ports: ["5433:5432"]   # 5433 on the host: a local Homebrew Postgres owns 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6380:6379"]   # 6380 on the host: a local Redis owns 6379
+    volumes: [redisdata:/data]
+
+volumes:
+  pgdata:
+  redisdata:

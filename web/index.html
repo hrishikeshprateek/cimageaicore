@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CIMAGE Video Intelligence</title>
+<style>
+  :root{--bg:#f6f7f9;--card:#fff;--ink:#1a1d23;--muted:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;--accent-soft:#dbeafe;--ok:#15803d;--ok-soft:#dcfce7;--bad:#b91c1c;--bad-soft:#fee2e2;--warn:#b45309;--warn-soft:#fef3c7;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--ink:#e6e8ee;--muted:#9aa3b2;--line:#2a2f3a;--accent:#60a5fa;--accent-soft:#1e2a44;--ok:#4ade80;--ok-soft:#14301f;--bad:#f87171;--bad-soft:#3b1a1a;--warn:#fbbf24;--warn-soft:#3a2a0e}}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--line);background:var(--card)}
+  header h1{font-size:17px;margin:0;font-weight:650}header h1 span{color:var(--muted);font-weight:400;margin-left:8px;font-size:13px}
+  .badge{font:12px var(--mono);padding:3px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent)}
+  .badge.mock{background:var(--warn-soft);color:var(--warn)}
+  main{display:grid;grid-template-columns:360px 1fr;gap:20px;padding:20px 24px;max-width:1500px;margin:0 auto}
+  @media(max-width:900px){main{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 12px}
+  .drop{border:2px dashed var(--line);border-radius:10px;padding:22px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
+  .drop.over,.drop:hover{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+  .drop strong{display:block;color:var(--ink);font-size:14px}
+  .or{text-align:center;color:var(--muted);font-size:12px;margin:10px 0}
+  input[type=text]{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink);font-size:13px;margin-bottom:8px}
+  button{width:100%;padding:10px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:600;font-size:14px;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .msg{font-size:12px;margin-top:8px;color:var(--muted);min-height:16px}.msg.err{color:var(--bad)}
+  .jobs{margin-top:20px}.job{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer}
+  .job:hover,.job.sel{border-color:var(--accent);background:var(--accent-soft)}
+  .job .n{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px}.job .t{font-size:11px;color:var(--muted)}
+  .chip{font:11px var(--mono);padding:2px 7px;border-radius:6px;background:var(--line);white-space:nowrap}
+  .chip.BLOCKS_COMPLETE,.chip.INDEXED{background:var(--ok-soft);color:var(--ok)}.chip.FAILED{background:var(--bad-soft);color:var(--bad)}
+  .chip.ANALYZING,.chip.UPLOADED,.chip.QUEUED,.chip.STABLE,.chip.RECEIVED,.chip.BLOCKS_PARTIAL{background:var(--accent-soft);color:var(--accent)}
+  .empty{color:var(--muted);text-align:center;padding:40px 0}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);font-size:12px;word-break:break-all}
+  .timeline{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 0}.step{font:11px var(--mono);padding:4px 8px;border-radius:6px;background:var(--line);color:var(--muted)}
+  .step.done{background:var(--ok-soft);color:var(--ok)}.step.cur{background:var(--accent-soft);color:var(--accent);animation:pulse 1.2s infinite}.step.fail{background:var(--bad-soft);color:var(--bad)}
+  @keyframes pulse{50%{opacity:.5}}
+  .tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--line);margin:14px 0 12px}.tab{padding:6px 10px;border-radius:8px 8px 0 0;cursor:pointer;color:var(--muted);font-size:13px}
+  .tab.on{color:var(--accent);border-bottom:2px solid var(--accent)}.tab b{font-family:var(--mono);font-weight:500;font-size:11px;margin-left:4px}
+  .block{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}.block .ts{font:11px var(--mono);color:var(--accent);margin-right:8px}
+  .block h4{margin:0 0 4px;font-size:14px}.block p{margin:2px 0;font-size:13px}.block .m{color:var(--muted);font-size:12px}
+  .conf{float:right;font:11px var(--mono);color:var(--muted)}
+  pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;font:12px var(--mono);max-height:70vh}
+  .warn{background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:8px 12px;font-size:12px;margin-top:10px}
+  .err{background:var(--bad-soft);color:var(--bad);border-radius:8px;padding:8px 12px;font-size:13px;margin-top:10px;font-family:var(--mono)}
+  .hit{padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-top:6px;cursor:pointer;font-size:12px}.hit:hover{border-color:var(--accent)}
+  .hit .ty{font:11px var(--mono);color:var(--accent)}.hit .src{color:var(--muted);font-size:11px}
+  .stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--muted)}.stats b{color:var(--ink);font-family:var(--mono);font-weight:500}
+</style>
+</head>
+<body>
+<header>
+  <h1>CIMAGE Video Intelligence <span>v0.1 · Video → Knowledge Blocks</span></h1>
+  <span id="prov" class="badge">…</span>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>Analyse a video</h2>
+      <div class="drop" id="drop"><strong>Drop a video here</strong>or click to choose a file<input type="file" id="file" accept="video/*" hidden></div>
+      <div class="or">— or —</div>
+      <input type="text" id="url" placeholder="YouTube URL (public)">
+      <input type="text" id="path" placeholder="NAS / local path (must be under an allowed root)">
+      <button id="go">Analyze</button>
+      <div class="msg" id="msg"></div>
+    </div>
+    <div class="card" style="margin-top:20px">
+      <h2>Search knowledge blocks</h2>
+      <input type="text" id="q" placeholder="e.g. incubation, placements, a person's name…">
+      <div id="hits"></div>
+    </div>
+    <div class="jobs" id="jobs"></div>
+  </section>
+  <section id="detail" class="card"><div class="empty">Select a job to see its stages and blocks.</div></section>
+</main>
+<script>
+const $=s=>document.querySelector(s);const api=p=>fetch('/api/v1'+p).then(r=>r.ok?r.json():r.json().then(e=>{throw new Error(e.detail||r.statusText)}));
+let SYSTEM=null,JOBS=[],SEL=null,RESULT=null,TAB='summary',pickedFile=null;
+const STATES=['RECEIVED','STABLE','QUEUED','UPLOADED','ANALYZING','BLOCKS_PARTIAL','BLOCKS_COMPLETE'];
+const fmtT=s=>new Date(s).toLocaleTimeString();const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const bytes=n=>n==null?'–':n>1e9?(n/1e9).toFixed(2)+' GB':n>1e6?(n/1e6).toFixed(1)+' MB':(n/1e3).toFixed(0)+' KB';
+const dur=s=>s==null?'–':new Date(s*1000).toISOString().substr(11,8);
+
+async function init(){SYSTEM=await api('/system');const b=$('#prov');b.textContent=SYSTEM.provider+' · '+SYSTEM.model;b.className='badge '+SYSTEM.provider;await refresh();setInterval(refresh,2000);const m=location.hash.match(/job=([a-f0-9]+)/);if(m&&JOBS.find(j=>j.id===m[1]))select(m[1]);}
+async function refresh(){JOBS=await api('/jobs');renderJobs();if(SEL){const j=JOBS.find(x=>x.id===SEL);if(j){if(j.state==='BLOCKS_COMPLETE'&&!RESULT){RESULT=await api('/jobs/'+SEL+'/result');}renderDetail(j);}}}
+function renderJobs(){const el=$('#jobs');if(!JOBS.length){el.innerHTML='<div class="empty">No jobs yet.</div>';return}
+ el.innerHTML=JOBS.map(j=>`<div class="job ${j.id===SEL?'sel':''}" data-id="${j.id}"><div><div class="n" title="${esc(j.source.name)}">${esc(j.source.name)}</div><div class="t">${j.source.kind} · ${fmtT(j.created_at)} · ${j.id}</div></div><span class="chip ${j.state}">${j.state}</span></div>`).join('');
+ el.querySelectorAll('.job').forEach(n=>n.onclick=()=>select(n.dataset.id));}
+async function select(id){SEL=id;RESULT=null;TAB='summary';history.replaceState(null,'','#job='+id);const j=JOBS.find(x=>x.id===id);if(j.state==='BLOCKS_COMPLETE')RESULT=await api('/jobs/'+id+'/result');renderJobs();renderDetail(j);}
+
+function renderDetail(j){const s=j.source;const failed=j.state==='FAILED';const idx=STATES.indexOf(j.state);
+ const steps=STATES.map((st,i)=>{const hit=j.stages.some(x=>x.state===st);const cls=failed?(hit?'done':''):(st===j.state&&j.state!=='BLOCKS_COMPLETE'?'cur':hit?'done':'');return `<span class="step ${cls}">${st}</span>`}).join('')+(failed?'<span class="step fail">FAILED</span>':'');
+ const last=j.stages[j.stages.length-1];
+ let html=`<h2>Job ${j.id} <span class="chip ${j.state}">${j.state}</span></h2>
+ <dl class="kv"><dt>Source</dt><dd>${esc(s.name)}</dd><dt>Kind</dt><dd>${s.kind}${s.path?' · '+esc(s.path):''}${s.url?' · '+esc(s.url):''}</dd><dt>Size / duration</dt><dd>${bytes(s.size_bytes)} · ${dur(s.duration_seconds)}</dd><dt>Provider</dt><dd>${j.provider} · ${j.model}</dd></dl>
+ <div class="timeline">${steps}</div><div class="m" style="font-size:12px;color:var(--muted);margin-top:6px">last: ${last.state} at ${fmtT(last.at)} ${Object.keys(last.detail).length?'· <code>'+esc(JSON.stringify(last.detail))+'</code>':''}</div>`;
+ if(j.error)html+=`<div class="err">${esc(j.error)}</div>`;
+ if(j.warnings&&j.warnings.length)html+=`<div class="warn">⚠ ${j.warnings.map(esc).join(' · ')}</div>`;
+ if(RESULT){const u=RESULT.usage||{};html+=`<div class="stats"><span>processing <b>${RESULT.processing_seconds}s</b></span><span>tokens in <b>${u.input_tokens??'–'}</b></span><span>out <b>${u.output_tokens??'–'}</b></span><span>thought <b>${u.thought_tokens??'–'}</b></span><span>repaired <b>${RESULT.repaired}</b></span><span>prompt <b>${RESULT.prompt_version}</b></span></div>`;html+=renderBlocks(RESULT);}
+ $('#detail').innerHTML=html;$('#detail').querySelectorAll('.tab').forEach(t=>t.onclick=()=>{TAB=t.dataset.t;renderDetail(j)});}
+
+function renderBlocks(r){const a=r.analysis;const tabs=[['summary','Summary',1],['events','Events',a.events.length],['people','People',a.people.length],['topics','Topics',a.topics.length],['key_moments','Key moments',a.key_moments.length],['quotes','Quotes',a.quotes.length],['transcript','Transcript',a.transcript.length],['media','Media',a.media.length],['content_opportunities','Opportunities',a.content_opportunities.length],['json','Raw JSON','']];
+ let h='<div class="tabs">'+tabs.map(([k,l,n])=>`<span class="tab ${TAB===k?'on':''}" data-t="${k}">${l}<b>${n}</b></span>`).join('')+'</div>';
+ const conf=c=>c==null?'':`<span class="conf">conf ${(c*100).toFixed(0)}%</span>`;const tsl=t=>(t||[]).map(x=>`<span class="ts">${esc(x)}</span>`).join('');
+ switch(TAB){
+  case 'summary':h+=`<div class="block"><h4>${esc(a.video.title)}</h4><p class="m">${a.video.video_type} · ${a.video.language} · observed ${esc(a.video.observed_duration||'–')}</p><p>${esc(a.video.description)}</p></div><div class="block"><h4>Summary</h4><p><b>${esc(a.summary.short_summary)}</b></p><p>${esc(a.summary.detailed_summary).replace(/\n/g,'<br>')}</p><ul>${a.summary.key_points.map(k=>'<li>'+esc(k)+'</li>').join('')}</ul></div>`;break;
+  case 'events':h+=a.events.map(e=>`<div class="block">${conf(e.confidence)}<h4>${esc(e.name)}</h4><p class="m">${esc(e.date||'date unknown')} · ${esc(e.venue||'venue unknown')} · ${esc(e.organizer||'')}</p><p>${esc(e.description)}</p></div>`).join('')||'<div class="empty">none</div>';break;
+  case 'people':h+=a.people.map(p=>`<div class="block">${conf(p.confidence)}<h4>${esc(p.name)} ${p.identified_by?'<span class="chip">'+esc(p.identified_by)+'</span>':''}</h4><p class="m">${esc(p.role||'role unknown')}</p><p>${esc(p.context)}</p><p>${tsl(p.timestamps)}</p></div>`).join('')||'<div class="empty">none</div>';break;
+  case 'topics':h+=a.topics.map(t=>`<div class="block">${conf(t.confidence)}<h4>${esc(t.name)}</h4><p>${esc(t.evidence)}</p><p>${tsl(t.timestamps)}</p></div>`).join('')||'<div class="empty">none</div>';break;
+  case 'key_moments':h+=a.key_moments.map(k=>`<div class="block"><span class="ts">${esc(k.timestamp)}</span><span class="chip">${k.importance}</span><p>${esc(k.description)}</p></div>`).join('')||'<div class="empty">none</div>';break;
+  case 'quotes':h+=a.quotes.map(q=>`<div class="block"><span class="ts">${esc(q.timestamp)}</span><b>${esc(q.speaker)}</b><p>“${esc(q.text)}”</p><p class="m">${esc(q.source_reference)}</p></div>`).join('')||'<div class="empty">none</div>';break;
+  case 'transcript':h+=a.transcript.map(t=>`<div class="block"><span class="ts">${esc(t.start_time)}–${esc(t.end_time)}</span><b>${esc(t.speaker)}</b> <span class="m">${esc(t.language||'')}</span><p>${esc(t.text)}</p></div>`).join('')||'<div class="empty">none</div>';break;
+  case 'media':h+=a.media.map(m=>`<div class="block"><span class="ts">${esc(m.timestamp)}</span>${m.suitable_for.map(x=>'<span class="chip">'+x+'</span>').join(' ')}<p>${esc(m.description)}</p></div>`).join('')||'<div class="empty">none</div>';break;
+  case 'content_opportunities':h+=a.content_opportunities.map(c=>`<div class="block">${conf(c.confidence)}<h4>${esc(c.title)}</h4><p>${esc(c.reason)}</p><p class="m">for ${esc(c.audience)} · ${c.suggested_formats.map(x=>'<span class="chip">'+x+'</span>').join(' ')}</p></div>`).join('')||'<div class="empty">none</div>';break;
+  case 'json':h+=`<pre>${esc(JSON.stringify(r,null,2))}</pre>`;break;}
+ return h;}
+
+// ---- input handling
+const drop=$('#drop'),fileIn=$('#file');drop.onclick=()=>fileIn.click();fileIn.onchange=()=>setFile(fileIn.files[0]);
+['dragenter','dragover'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('over')}));['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',ev=>setFile(ev.dataTransfer.files[0]));
+function setFile(f){pickedFile=f||null;drop.querySelector('strong').textContent=f?f.name+' ('+bytes(f.size)+')':'Drop a video here';}
+$('#go').onclick=async()=>{const fd=new FormData();const url=$('#url').value.trim(),path=$('#path').value.trim();
+ if(pickedFile)fd.append('file',pickedFile);else if(url)fd.append('url',url);else if(path)fd.append('path',path);else return msg('Choose a file, or enter a URL or path.',1);
+ $('#go').disabled=true;msg(pickedFile?'Uploading…':'Submitting…');
+ try{const r=await fetch('/api/v1/analyze',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw new Error(d.detail||r.statusText);msg('Job '+d.job_id+' queued.');setFile(null);fileIn.value='';$('#url').value='';$('#path').value='';await refresh();select(d.job_id);}
+ catch(e){msg(e.message,1)}finally{$('#go').disabled=false}};
+let qTimer=null;$('#q').addEventListener('input',()=>{clearTimeout(qTimer);qTimer=setTimeout(runSearch,300)});
+async function runSearch(){const q=$('#q').value.trim();const el=$('#hits');if(q.length<2){el.innerHTML='';return}
+ try{const hits=await api('/search?q='+encodeURIComponent(q)+'&limit=8');
+  el.innerHTML=hits.length?hits.map(h=>`<div class="hit" data-job="${h.job_id}"><span class="ty">${h.block_type}</span> ${h.timestamp?'<span class="ts">'+esc(h.timestamp)+'</span>':''} ${esc(h.text.slice(0,140))}<div class="src">${esc(h.source_name)}</div></div>`).join(''):'<div class="m" style="color:var(--muted);font-size:12px;margin-top:6px">no matches</div>';
+  el.querySelectorAll('.hit').forEach(n=>n.onclick=()=>select(n.dataset.job));}
+ catch(e){el.innerHTML='<div class="msg err">'+esc(e.message)+'</div>'}}
+function msg(t,err){const m=$('#msg');m.textContent=t;m.className='msg'+(err?' err':'')}
+init();
+</script>
+</body>
+</html>
