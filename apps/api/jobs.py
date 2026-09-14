@@ -213,10 +213,15 @@ def embed_job_blocks(store, embedder, job_id: str) -> int:
 class JobRunner:
     """Tiny in-process queue (thread pool). Stands in for Redis + workers until Phase 2."""
 
-    def __init__(self, store, worker_threads: int = 2, embedder=None):
+    def __init__(self, store, worker_threads: int = 2, embedder=None, content_store=None):
         self.store = store
         self.embedder = embedder
+        self.content_store = content_store
         self.pool = ThreadPoolExecutor(max_workers=worker_threads, thread_name_prefix="video-worker")
+
+    def run_async(self, fn: Callable[[], None]) -> None:
+        """Run any background task (e.g. a blog draft) on the same pool."""
+        self.pool.submit(fn)
 
     def submit(self, job_id: str, work: Callable[[Callable[[str, dict[str, Any]], None]], AnalysisResult]) -> None:
         self.store.transition(job_id, JobState.QUEUED)
@@ -243,6 +248,14 @@ class JobRunner:
             except Exception as exc:  # noqa: BLE001
                 log.exception("job %s embedding failed", job_id)
                 self.store.transition(job_id, JobState.BLOCKS_COMPLETE, {"embedding_error": f"{type(exc).__name__}: {exc}"})
+                return
+            if self.content_store is not None:
+                try:
+                    created = self.content_store.create_opportunities_from_job(job_id)
+                    if created:
+                        self.store.transition(job_id, JobState.CONTENT_CANDIDATE, {"opportunities": created})
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("job %s opportunity extraction failed", job_id)
 
         self.pool.submit(run)
 

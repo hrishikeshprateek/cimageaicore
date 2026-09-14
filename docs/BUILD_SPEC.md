@@ -112,8 +112,8 @@ GPU optional for the Gemini-first design.
 11. Embeddings + pgvector retrieval ✅ (003_embeddings; Gemini Embedding 2; EMBEDDING→INDEXED; hybrid RRF search)
 12. Block/search UI ✅ hybrid / semantic / keyword modes
 13. Permitted online-video source adapter ✅ (YouTube URL → Gemini)
-14. Content-opportunity generation
-15. Blog Agent
+14. Content-opportunity generation ✅ (queue from content_opportunity blocks; manual briefs; CONTENT_CANDIDATE state)
+15. Blog Agent ✅ (retriever + evidence pack + grounded draft + social posts; agent_runs audit)
 16. Approval dashboard + WordPress
 17. Production deployment on the 64 GB server
 

@@ -161,8 +161,16 @@ class GeminiProvider:
         on_stage("UPLOADED", {"file": f.name, "uri": f.uri, "mime_type": f.mime_type, "size_bytes": f.size_bytes, "upload_seconds": upload_seconds})
         return f
 
-    def _create_with_retry(self, *, input: list[dict[str, Any]], system_instruction: str, json_schema: dict[str, Any]):
-        gen_cfg: dict[str, Any] = {"thinking_level": self.thinking_level}
+    def generate_structured(self, system_instruction: str, prompt: str, json_schema: dict[str, Any], *, model: str | None = None, thinking_level: str | None = None) -> RawModelOutput:
+        """Text-only structured call (used by content agents)."""
+        it = self._create_with_retry(
+            input=[{"type": "text", "text": prompt}], system_instruction=system_instruction, json_schema=json_schema,
+            model=model, thinking_level=thinking_level,
+        )
+        return self._to_output(it)
+
+    def _create_with_retry(self, *, input: list[dict[str, Any]], system_instruction: str, json_schema: dict[str, Any], model: str | None = None, thinking_level: str | None = None):
+        gen_cfg: dict[str, Any] = {"thinking_level": thinking_level or self.thinking_level}
         if self.max_output_tokens:
             gen_cfg["max_output_tokens"] = self.max_output_tokens
 
@@ -170,7 +178,7 @@ class GeminiProvider:
         for attempt in range(1, self.max_attempts + 1):
             try:
                 return self.client.interactions.create(
-                    model=self.model,
+                    model=model or self.model,
                     system_instruction=system_instruction,
                     input=input,
                     response_format={"type": "text", "mime_type": "application/json", "schema": json_schema},

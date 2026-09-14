@@ -34,7 +34,7 @@ def store(test_db_url):
     st = PostgresJobStore(pool)
     yield st
     with pool.connection() as conn:
-        conn.execute("TRUNCATE audit_log, knowledge_blocks, processing_jobs, media")
+        conn.execute("TRUNCATE audit_log, knowledge_blocks, processing_jobs, media CASCADE")
     st.close()
 
 

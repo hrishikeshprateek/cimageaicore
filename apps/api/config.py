@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     known_people_file: Path = REPO_ROOT / "prompts" / "known_people.txt"
     people_pass_version: str = "people_v1"   # blank disables the focused people pass
 
+    # content agents (V0.5)
+    blog_prompt_version: str = "blog_v1"
+    blog_model: str = ""              # blank = same model as video analysis
+    blog_thinking_level: str = "medium"
+
     database_url: str = ""      # blank -> JSON-file job store
     auto_migrate: bool = True
     redis_url: str = ""         # used from V0.4

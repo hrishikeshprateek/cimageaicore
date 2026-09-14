@@ -4,7 +4,7 @@ Event-driven AI media system for CIMAGE: watch the NAS, turn videos/documents in
 structured **knowledge blocks**, store them in PostgreSQL + pgvector, and (later) draft
 blogs/social posts for human approval and WordPress publishing.
 
-**Current milestone: V0.3 — Video → Gemini → knowledge blocks → PostgreSQL + pgvector, hybrid (keyword + semantic) search.**
+**Current milestone: V0.5/V0.6 — video → knowledge blocks → hybrid search → content-opportunity queue → grounded blog drafts → review (approve / edit / reject).** Publishing to WordPress is V1.0.
 See [docs/BUILD_SPEC.md](docs/BUILD_SPEC.md) for the full architecture and build order.
 
 ## Quick start (development, MacBook)
@@ -22,7 +22,8 @@ or with `python scripts/migrate.py`. If `DATABASE_URL` is blank or unreachable t
 JSON files under `data/` so it still runs without Docker.
 
 Open http://localhost:8000 — drop a video, paste a public YouTube URL, or give a path
-under `NAS_ALLOWED_ROOTS` (default `./data/nas-test`).
+under `NAS_ALLOWED_ROOTS` (default `./data/nas-test`). http://localhost:8000/content is the
+**Content Center**: the opportunities queue, drafts, evidence panel, edit and approval.
 
 Without `GEMINI_API_KEY` the app runs with the **mock provider** (placeholder blocks,
 clearly labelled `[MOCK]`) so the pipeline can be exercised offline.
@@ -38,24 +39,30 @@ clearly labelled `[MOCK]`) so the pipeline can be exercised offline.
 | `GET` | `/api/v1/jobs/{id}/blocks?block_type=quote` | flattened block rows (future `knowledge_blocks` table) |
 | `GET` | `/api/v1/search?q=…&mode=hybrid\|keyword\|vector&block_type=&media_id=` | hybrid search: Postgres full-text + pgvector cosine, reciprocal-rank fused; each hit says what matched it |
 | `GET` | `/api/v1/system` | provider/model/store/config in use |
+| `GET/POST` | `/api/v1/opportunities`, `…/{id}/status` | content-opportunity queue (AI-proposed per video, or manual); accept / dismiss |
+| `POST` | `/api/v1/drafts` | `{opportunity_id}` or `{brief}` → Blog Agent runs in the background (202) |
+| `GET/PUT` | `/api/v1/drafts/{id}`, `…/versions`, `…/regenerate`, `…/status` | draft with evidence + citations; editor edits are versioned; `in_review` / `approved` / `rejected` |
+| `GET` | `/api/v1/agent-runs` | every agent call: model, prompt version, tokens, seconds |
 
 Submitting the same bytes (sha256) or the same URL twice returns the existing job (`deduplicated: true`)
 unless the earlier attempt failed, in which case a retry job is created against the same `media` row.
 
-Job states: `RECEIVED → STABLE → QUEUED → UPLOADED → ANALYZING (main) → ANALYZING (people) → BLOCKS_PARTIAL → BLOCKS_COMPLETE → EMBEDDING → INDEXED` (or `FAILED`).
+Job states: `RECEIVED → STABLE → QUEUED → UPLOADED → ANALYZING (main) → ANALYZING (people) → BLOCKS_PARTIAL → BLOCKS_COMPLETE → EMBEDDING → INDEXED → CONTENT_CANDIDATE` (or `FAILED`).
 An embedding failure leaves the job at `BLOCKS_COMPLETE` (blocks are safe); `python scripts/embed_backfill.py` finishes it.
 
 ## Layout
 
 ```
-apps/api            FastAPI app, config, routes, db (pool + migrations), jobs (states, JSON store, runner), pg_store
+apps/api            FastAPI app, config, routes, content_routes, db, jobs (states, JSON store, runner), pg_store, content_store
+agents/blog_agent   Blog Agent: brief → evidence pack → grounded draft (citations checked against evidence)
+services/retrieval  Retriever: hybrid search → bounded, source-referenced evidence pack
 services/ai_gateway provider abstraction: base, gemini (Interactions API), mock
 services/block_engine schemas (v1 blocks), sources (upload / nas_file / online), engine
-prompts/            versioned prompt templates
+prompts/            versioned prompts: video-analysis/{v1,v2,people_v1}, content-generation/{blog_v1, style_guide}, known_people.txt
 web/                single-page UI
 tests/              pytest (mock provider, schema, API)
 docker/, docker-compose.yml   api + pgvector + redis (postgres/redis used from Phase 3)
-database/migrations 001_init (pgvector), 002_core (media, processing_jobs, knowledge_blocks, audit_log)
+database/migrations 001_init, 002_core, 003_embeddings, 004_content (content_opportunities, drafts, draft_versions, agent_runs)
 scripts/            analyze.py (benchmark CLI), migrate.py, import_analysis.py, embed_backfill.py
 services/ai_gateway/embeddings.py   Gemini Embedding 2 (768-d, per-text via Content wrapping) or mock
 data/               uploads/, jobs/, analyses/, nas-test/   (git-ignored)
@@ -85,6 +92,15 @@ Benchmark any combination with `python scripts/analyze.py <video> --model … --
 stored in `knowledge_blocks.embedding` with an HNSW cosine index. Free tier: 100 RPM / 1K RPD; paid $0.20 per 1M tokens
 (a whole video's blocks ≈ 2–5k tokens). Cross-lingual: Hindi queries find English blocks. YouTube URLs are canonicalised
 to `watch?v=<id>` (playlist/radio parameters make Gemini return 403).
+
+## Blog Agent (V0.5)
+
+`POST /api/v1/drafts` → the Retriever builds an evidence pack (all blocks of the anchoring video + hybrid hits
+across the library, facts before colour, bounded to 40 blocks / 14k chars) → `prompts/content-generation/blog_v1.md`
+with the style guide derived from cimage.in/blog → strict JSON (title, slug, SEO, body markdown, tags, citations,
+hero image block, LinkedIn/Instagram/Facebook posts, evidence gaps). Every citation is checked against the evidence;
+unknown ones are dropped and flagged. Inline `[id=…]` markers stay in the stored body for review and are stripped in
+`body_markdown_clean`. First real run: 685 words, 18 valid citations from two videos, 7.8k tokens (≈ ₹0.6 paid).
 
 ## Tests
 
