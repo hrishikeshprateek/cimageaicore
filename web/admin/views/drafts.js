@@ -30,7 +30,7 @@ async function draw(force) {
   <div class="card reader" id="reader">${sel ? '<div class="loading"><span class="spin"></span></div>' : emptyState('review', 'Select a draft to read it', 'or press New article to write one from a brief')}</div></div>`;
   root.querySelector('#newart').onclick = () => newArticleDialog('');
   root.querySelectorAll('.chip[data-f]').forEach((s) => s.onclick = () => { filter = s.dataset.f; draw(false); });
-  root.querySelectorAll('#dl .li').forEach((n) => n.onclick = async () => { sel = n.dataset.id; tab = 'article'; draft = null; CANDS = []; LIB = []; history.replaceState(null, '', '#drafts/' + sel); root.querySelectorAll('#dl .li').forEach((x) => x.classList.toggle('sel', x === n)); root.querySelector('#reader').innerHTML = '<div class="loading"><span class="spin"></span></div>'; try { draft = await api('/drafts/' + sel); } catch (e) { toast(e.message, true); } drawReader(); });
+  root.querySelectorAll('#dl .li').forEach((n) => n.onclick = async () => { sel = n.dataset.id; tab = 'article'; draft = null; CANDS = []; LIB = []; history.replaceState(null, '', '#drafts/' + sel); root.querySelectorAll('#dl .li').forEach((x) => x.classList.toggle('sel', x === n)); root.querySelector('#reader').innerHTML = '<div class="loading"><span class="spin"></span></div>'; try { draft = await api('/drafts/' + sel); } catch (e) { toast(e.message, true); } drawReader(); if (window.innerWidth <= 1100) root.querySelector('#reader').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
   if (sel) drawReader();
 }
 
