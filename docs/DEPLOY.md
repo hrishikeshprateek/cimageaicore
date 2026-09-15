@@ -27,11 +27,13 @@ sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.ta
 Mount the college NAS read-only (one line in `/etc/fstab`; `nofail` so a NAS outage never blocks boot):
 
 ```
-//NAS-IP/media  /mnt/nas  cifs  credentials=/etc/nas.cred,ro,uid=1000,gid=1000,_netdev,nofail,iocharset=utf8  0  0
+//192.168.1.50/home  /mnt/nas  cifs  credentials=/etc/nas.cred,ro,uid=1000,gid=1000,_netdev,nofail,iocharset=utf8,vers=3.0  0  0
 ```
+(the CIMAGE NAS is `digital.local` = 192.168.1.50, share `home`; use the IP in fstab — `.local` names need avahi/mDNS on Ubuntu Server)
 
-`/etc/nas.cred` holds `username=` / `password=` of a **read-only** NAS account (`chmod 600`). Create the drop folder
-the watcher scans, e.g. `/mnt/nas/AI-Test` (the spec: watch `/AI-Test` only, not the whole NAS).
+`/etc/nas.cred` holds `username=` / `password=` of a **read-only** NAS account (`chmod 600`). The watcher scans exactly the
+folder you put in `NAS_WATCH_DIR` (e.g. `NAS_WATCH_DIR="/mnt/nas/Cimage AI Agent"`), never the whole NAS — that folder is
+mounted at `/nas` inside the container.
 
 ## 2. One-shot install (recommended)
 

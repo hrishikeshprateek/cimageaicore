@@ -17,14 +17,14 @@ services:
       EMBEDDING_PROVIDER: ollama     # EmbeddingGemma on this box; set gemini to pay for the API instead
       OLLAMA_URL: http://ollama:11434
       WATCHER_ENABLED: "true"        # scan the folder below; new videos -> analysis -> blocks -> embeddings -> draft
-      WATCH_ROOTS: /nas/AI-Test
+      WATCH_ROOTS: /nas                # = the host folder in NAS_WATCH_DIR, mounted below; point NAS_WATCH_DIR at the exact folder to scan
       AUTO_DRAFT: "true"             # the best opportunity of every finished video becomes a blog draft for review
       COMPOSER_TEMPLATES_DIR: /data/composer/templates   # keep templates (the real frame PNGs) and renders on the data volume
       COMPOSER_RENDERS_DIR: /data/renders
     ports: ["8000:8000"]
     volumes:
       - ./data:/data
-      - ${NAS_WATCH_DIR:-./data/nas-test}:/nas:ro   # the NAS share (read-only); set NAS_WATCH_DIR=/mnt/nas in .env on the server
+      - ${NAS_WATCH_DIR:-./data/nas-test/AI-Test}:/nas:ro   # the NAS drop folder (read-only), e.g. NAS_WATCH_DIR="/mnt/nas/Cimage AI Agent" in .env on the server
     depends_on:
       postgres: { condition: service_healthy }   # never start against a half-initialised database (the API would fall back to JSON files)
       redis: { condition: service_healthy }
