@@ -1,6 +1,8 @@
 """Evidence retrieval for content agents: turns a brief into a bounded, source-referenced evidence pack."""
 from __future__ import annotations
 
+import logging
+
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -39,14 +41,23 @@ class EvidencePack(BaseModel):
         return "\n".join(lines)
 
 
+log = logging.getLogger(__name__)
+
+
 class Retriever:
     def __init__(self, store, embedder):
         self.store = store
         self.embedder = embedder
 
     def search(self, q: str, *, k: int = 10, block_type: str | None = None, media_id: str | None = None, mode: str = "hybrid"):
-        qvec = self.embedder.embed_query(q) if (mode != "keyword" and getattr(self.store, "supports_vectors", False)) else None
-        return self.store.search(q, block_type, k, query_vector=qvec, media_id=media_id, mode=mode)
+        qvec = None
+        if mode != "keyword" and getattr(self.store, "supports_vectors", False):
+            try:
+                qvec = self.embedder.embed_query(q)
+            except Exception as exc:  # noqa: BLE001 - the writer must still get evidence when the embedder is down
+                log.warning("embedder unavailable (%s); retrieval degraded to keyword-only", exc)
+                mode = "keyword"
+        return self.store.search(q, block_type, k, query_vector=qvec, media_id=media_id, mode=mode, vector_model=self.embedder.model)
 
     def evidence_for(
         self,

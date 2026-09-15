@@ -216,8 +216,11 @@ class PostgresJobStore:
         query_vector: list[float] | None = None,
         media_id: str | None = None,
         mode: str = "hybrid",
+        vector_model: str | None = None,
     ) -> list[SearchHit]:
-        """keyword = Postgres full-text; vector = pgvector cosine; hybrid = reciprocal-rank fusion of both."""
+        """keyword = Postgres full-text; vector = pgvector cosine; hybrid = reciprocal-rank fusion of both.
+
+        `vector_model` restricts the vector branch to blocks embedded by that model (vectors from two models are not comparable)."""
         use_kw = mode in ("hybrid", "keyword")
         use_vec = mode in ("hybrid", "vector") and query_vector is not None
         if not use_kw and not use_vec:
@@ -246,13 +249,16 @@ class PostgresJobStore:
                 for r in rows:
                     kw_ids.append(r["id"]); rows_by_id[r["id"]] = r
             if use_vec:
+                vfilters, vparams = filters, list(params)
+                if vector_model:
+                    vfilters += " AND b.embedding_model = %s"; vparams.append(vector_model)
                 rows = conn.execute(
                     f"""SELECT b.*, m.name AS source_name, 1 - (b.embedding <=> %s::vector) AS similarity
                         FROM knowledge_blocks b JOIN media m ON m.id = b.media_id
-                        WHERE b.embedding IS NOT NULL{filters}
+                        WHERE b.embedding IS NOT NULL{vfilters}
                         ORDER BY b.embedding <=> %s::vector
                         LIMIT %s""",
-                    [_vec_literal(query_vector), *params, _vec_literal(query_vector), pool_n],
+                    [_vec_literal(query_vector), *vparams, _vec_literal(query_vector), pool_n],
                 ).fetchall()
                 for r in rows:
                     vec_ids.append(r["id"]); rows_by_id.setdefault(r["id"], r)
@@ -267,13 +273,17 @@ class PostgresJobStore:
         return hits
 
     # ---------------------------------------------------------------- embeddings
-    def pending_embeddings(self, job_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
-        """Blocks without a vector: id, block_type, text and the video title (used as the document title)."""
+    def pending_embeddings(self, job_id: str | None = None, limit: int = 500, model: str | None = None) -> list[dict[str, Any]]:
+        """Blocks that need (re-)embedding: no vector, or - when `model` is given - a vector from a different model.
+        Returns id, block_type, text and the video title (used as the document title)."""
         with self.pool.connection() as conn:
             sql = """SELECT b.id, b.block_type, b.text, COALESCE(j.result->'analysis'->'video'->>'title', m.name) AS title
                      FROM knowledge_blocks b JOIN processing_jobs j ON j.id = b.job_id JOIN media m ON m.id = b.media_id
-                     WHERE b.embedding IS NULL"""
+                     WHERE (b.embedding IS NULL"""
             params: list[Any] = []
+            if model:
+                sql += " OR b.embedding_model IS DISTINCT FROM %s"; params.append(model)
+            sql += ")"
             if job_id:
                 sql += " AND b.job_id = %s"; params.append(job_id)
             return conn.execute(sql + " ORDER BY b.created_at LIMIT %s", [*params, limit]).fetchall()
@@ -286,10 +296,16 @@ class PostgresJobStore:
             )
             return len(rows)
 
-    def embedding_stats(self) -> dict[str, int]:
+    def embedding_stats(self, model: str | None = None) -> dict[str, Any]:
+        """total / embedded / pending, plus per-model counts and how many vectors are `stale` (from a model other than `model`)."""
         with self.pool.connection() as conn:
             r = conn.execute("SELECT count(*) AS total, count(embedding) AS embedded FROM knowledge_blocks").fetchone()
-            return {"total": r["total"], "embedded": r["embedded"], "pending": r["total"] - r["embedded"]}
+            by_model = {row["embedding_model"]: row["n"] for row in
+                        conn.execute("SELECT embedding_model, count(*) AS n FROM knowledge_blocks WHERE embedding IS NOT NULL GROUP BY 1").fetchall()}
+            out: dict[str, Any] = {"total": r["total"], "embedded": r["embedded"], "pending": r["total"] - r["embedded"], "by_model": by_model}
+            if model:
+                out["stale"] = sum(n for m, n in by_model.items() if m != model)
+            return out
 
     @staticmethod
     def _row_to_block(r: dict[str, Any]) -> Block:
@@ -297,6 +313,17 @@ class PostgresJobStore:
                      timestamp=r["timestamp_ts"], payload=r["payload"], text=r["text"])
 
     # ---------------------------------------------------------------- audit
+    def recent_audit(self, limit: int = 50, *, actor: str | None = None) -> list[dict[str, Any]]:
+        with self.pool.connection() as conn:
+            sql, params = "SELECT id, at, actor, action, entity_type, entity_id, detail FROM audit_log", []
+            if actor:
+                sql += " WHERE actor = %s"; params.append(actor)
+            return conn.execute(sql + " ORDER BY id DESC LIMIT %s", [*params, limit]).fetchall()
+
+    def block_count(self) -> int:
+        with self.pool.connection() as conn:
+            return conn.execute("SELECT count(*) AS n FROM knowledge_blocks").fetchone()["n"]
+
     def audit(self, actor: str, action: str, entity_type: str | None = None, entity_id: str | None = None, detail: dict[str, Any] | None = None) -> None:
         with self.pool.connection() as conn:
             self._audit(conn, actor, action, entity_type, entity_id, detail or {})

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "CIMAGE AI Media Platform"
-    app_version: str = "0.1.0"
+    app_version: str = "0.8.0"
 
     ai_provider: Literal["auto", "gemini", "mock"] = "auto"
 
@@ -32,10 +32,12 @@ class Settings(BaseSettings):
     gemini_poll_timeout_seconds: float = 30      # status polls / deletes
 
     # embeddings (V0.3)
-    embedding_provider: Literal["auto", "gemini", "mock"] = "auto"
-    embedding_model: str = "gemini-embedding-2"
+    embedding_provider: Literal["auto", "gemini", "ollama", "mock"] = "auto"   # ollama = local EmbeddingGemma, no API cost
+    embedding_model: str = "auto"            # auto -> gemini-embedding-2 / embeddinggemma / mock-embed-v1 per provider
     embedding_dimensions: int = 768          # must match database/migrations/003_embeddings.sql
     embedding_batch_size: int = 32
+    ollama_url: str = "http://localhost:11434"
+    ollama_timeout_seconds: float = 120
 
     data_dir: Path = REPO_ROOT / "data"
     nas_allowed_roots: str = "./data/nas-test"
@@ -52,9 +54,22 @@ class Settings(BaseSettings):
     people_pass_version: str = "people_v1"   # blank disables the focused people pass
 
     # content agents (V0.5)
-    blog_prompt_version: str = "blog_v1"
+    blog_prompt_version: str = "blog_v2"   # v2: depth modes + pictures from video frames / the local library
     blog_model: str = ""              # blank = same model as video analysis
     blog_thinking_level: str = "medium"
+
+    # folder watcher (V0.4): the NAS drops videos, the platform picks them up on its own
+    watcher_enabled: bool = False
+    watch_roots: str = ""                 # comma-separated; blank = every NAS_ALLOWED_ROOTS entry
+    watcher_interval_seconds: float = 30
+    watcher_stable_seconds: float = 10    # (size, mtime) unchanged for this long = copy finished
+    watcher_max_active_jobs: int = 2      # analyses in flight at once; the rest wait their turn (Gemini quota)
+
+    # auto-draft (V0.6): a finished video's best content opportunity becomes a blog draft for review, unasked
+    auto_draft: bool = False
+    auto_draft_max_per_video: int = 1
+    auto_draft_min_confidence: float = 0.5
+    auto_draft_depth: str = "standard"
 
     database_url: str = ""      # blank -> JSON-file job store
     auto_migrate: bool = True
@@ -81,13 +96,24 @@ class Settings(BaseSettings):
     @property
     def allowed_roots(self) -> list[Path]:
         roots = []
-        for raw in self.nas_allowed_roots.split(","):
+        for raw in f"{self.nas_allowed_roots},{self.watch_roots}".split(","):
             raw = raw.strip()
             if not raw:
                 continue
             p = Path(raw)
             roots.append((p if p.is_absolute() else REPO_ROOT / p).resolve())
         return roots
+
+    @property
+    def watch_roots_resolved(self) -> list[Path]:
+        raw = [x.strip() for x in self.watch_roots.split(",") if x.strip()]
+        if not raw:
+            return self.allowed_roots
+        return [(Path(r) if Path(r).is_absolute() else REPO_ROOT / r).resolve() for r in raw]
+
+    @property
+    def watcher_state_file(self) -> Path:
+        return self.data_dir / "watcher_state.json"
 
     @property
     def resolved_provider(self) -> str:

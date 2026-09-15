@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CIMAGE Video Intelligence</title>
 <style>
-  :root{--bg:#f6f7f9;--card:#fff;--ink:#1a1d23;--muted:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;--accent-soft:#dbeafe;--ok:#15803d;--ok-soft:#dcfce7;--bad:#b91c1c;--bad-soft:#fee2e2;--warn:#b45309;--warn-soft:#fef3c7;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-  @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--ink:#e6e8ee;--muted:#9aa3b2;--line:#2a2f3a;--accent:#60a5fa;--accent-soft:#1e2a44;--ok:#4ade80;--ok-soft:#14301f;--bad:#f87171;--bad-soft:#3b1a1a;--warn:#fbbf24;--warn-soft:#3a2a0e}}
+  :root{--bg:#f6f7f9;--card:#fff;--ink:#1a1d23;--muted:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;--accent-soft:#dbeafe;--ok:#15803d;--ok-soft:#dcfce7;--bad:#b91c1c;--bad-soft:#fee2e2;--warn:#b45309;--warn-soft:#fef3c7;--cand:#6d28d9;--cand-soft:#ede9fe;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--ink:#e6e8ee;--muted:#9aa3b2;--line:#2a2f3a;--accent:#60a5fa;--accent-soft:#1e2a44;--ok:#4ade80;--ok-soft:#14301f;--bad:#f87171;--bad-soft:#3b1a1a;--warn:#fbbf24;--warn-soft:#3a2a0e;--cand:#a78bfa;--cand-soft:#2a1f4a}}
   *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
   header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--line);background:var(--card)}
   header h1{font-size:17px;margin:0;font-weight:650}header h1 span{color:var(--muted);font-weight:400;margin-left:8px;font-size:13px}
@@ -24,12 +24,12 @@
   button{width:100%;padding:10px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:600;font-size:14px;cursor:pointer}
   button:disabled{opacity:.5;cursor:default}
   .msg{font-size:12px;margin-top:8px;color:var(--muted);min-height:16px}.msg.err{color:var(--bad)}
-  .jobs{margin-top:20px}.job{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer}
+  .jobs{margin-top:20px}.jobs h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0}.jobs .tabs{margin:6px 0 10px}.jobs .tab{padding:5px 8px;font-size:12px}.job{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer}
   .job:hover,.job.sel{border-color:var(--accent);background:var(--accent-soft)}
   .job .n{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px}.job .t{font-size:11px;color:var(--muted)}
   .chip{font:11px var(--mono);padding:2px 7px;border-radius:6px;background:var(--line);white-space:nowrap}
-  .chip.BLOCKS_COMPLETE,.chip.INDEXED{background:var(--ok-soft);color:var(--ok)}.chip.FAILED{background:var(--bad-soft);color:var(--bad)}
-  .chip.ANALYZING,.chip.UPLOADED,.chip.QUEUED,.chip.STABLE,.chip.RECEIVED,.chip.BLOCKS_PARTIAL{background:var(--accent-soft);color:var(--accent)}
+  .chip.BLOCKS_COMPLETE,.chip.INDEXED{background:var(--ok-soft);color:var(--ok)}.chip.CONTENT_CANDIDATE{background:var(--cand-soft);color:var(--cand)}.chip.FAILED{background:var(--bad-soft);color:var(--bad)}
+  .chip.ANALYZING,.chip.UPLOADED,.chip.QUEUED,.chip.STABLE,.chip.RECEIVED,.chip.BLOCKS_PARTIAL,.chip.EMBEDDING{background:var(--accent-soft);color:var(--accent)}
   .empty{color:var(--muted);text-align:center;padding:40px 0}
   .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);font-size:12px;word-break:break-all}
   .timeline{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 0}.step{font:11px var(--mono);padding:4px 8px;border-radius:6px;background:var(--line);color:var(--muted)}
@@ -51,7 +51,7 @@
 <body>
 <header>
   <h1>CIMAGE Video Intelligence <span>v0.1 · Video → Knowledge Blocks</span></h1>
-  <span><a href="/content" style="color:var(--accent);text-decoration:none;font-size:13px;margin-right:14px">Content Center →</a><span id="prov" class="badge">…</span></span>
+  <span><a href="/admin" style="color:var(--accent);text-decoration:none;font-size:13px;margin-right:14px;font-weight:600">Admin →</a><a href="/content" style="color:var(--accent);text-decoration:none;font-size:13px;margin-right:14px">Content Center →</a><a href="/composer" style="color:var(--accent);text-decoration:none;font-size:13px;margin-right:14px">Video Composer →</a><span id="prov" class="badge">…</span></span>
 </header>
 <main>
   <section>
@@ -77,20 +77,24 @@
 <script>
 const $=s=>document.querySelector(s);const api=p=>fetch('/api/v1'+p).then(r=>r.ok?r.json():r.json().then(e=>{throw new Error(e.detail||r.statusText)}));
 let SYSTEM=null,JOBS=[],SEL=null,RESULT=null,TAB='summary',pickedFile=null;
-const STATES=['RECEIVED','STABLE','QUEUED','UPLOADED','ANALYZING','BLOCKS_PARTIAL','BLOCKS_COMPLETE'];
+const STATES=['RECEIVED','STABLE','QUEUED','UPLOADED','ANALYZING','BLOCKS_PARTIAL','BLOCKS_COMPLETE','EMBEDDING','INDEXED','CONTENT_CANDIDATE'];
+const TERMINAL=['BLOCKS_COMPLETE','INDEXED','CONTENT_CANDIDATE','FAILED'];const hasResult=j=>['BLOCKS_COMPLETE','EMBEDDING','INDEXED','CONTENT_CANDIDATE'].includes(j.state);
+const FILTERS=[['all','All',()=>true],['running','Running',j=>!TERMINAL.includes(j.state)],['BLOCKS_COMPLETE','Complete',j=>j.state==='BLOCKS_COMPLETE'],['INDEXED','Indexed',j=>j.state==='INDEXED'],['CONTENT_CANDIDATE','Candidates',j=>j.state==='CONTENT_CANDIDATE'],['FAILED','Failed',j=>j.state==='FAILED']];let FILTER='all';
 const fmtT=s=>new Date(s).toLocaleTimeString();const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const bytes=n=>n==null?'–':n>1e9?(n/1e9).toFixed(2)+' GB':n>1e6?(n/1e6).toFixed(1)+' MB':(n/1e3).toFixed(0)+' KB';
 const dur=s=>s==null?'–':new Date(s*1000).toISOString().substr(11,8);
 
 async function init(){SYSTEM=await api('/system');const b=$('#prov');b.textContent=SYSTEM.provider+' · '+SYSTEM.model;b.className='badge '+SYSTEM.provider;await refresh();setInterval(refresh,2000);const m=location.hash.match(/job=([a-f0-9]+)/);if(m&&JOBS.find(j=>j.id===m[1]))select(m[1]);}
-async function refresh(){JOBS=await api('/jobs');renderJobs();if(SEL){const j=JOBS.find(x=>x.id===SEL);if(j){if(j.state==='BLOCKS_COMPLETE'&&!RESULT){RESULT=await api('/jobs/'+SEL+'/result');}renderDetail(j);}}}
+async function refresh(){JOBS=await api('/jobs');renderJobs();if(SEL){const j=JOBS.find(x=>x.id===SEL);if(j){if(hasResult(j)&&!RESULT){RESULT=await api('/jobs/'+SEL+'/result');}renderDetail(j);}}}
 function renderJobs(){const el=$('#jobs');if(!JOBS.length){el.innerHTML='<div class="empty">No jobs yet.</div>';return}
- el.innerHTML=JOBS.map(j=>`<div class="job ${j.id===SEL?'sel':''}" data-id="${j.id}"><div><div class="n" title="${esc(j.source.name)}">${esc(j.source.name)}</div><div class="t">${j.source.kind} · ${fmtT(j.created_at)} · ${j.id}</div></div><span class="chip ${j.state}">${j.state}</span></div>`).join('');
- el.querySelectorAll('.job').forEach(n=>n.onclick=()=>select(n.dataset.id));}
-async function select(id){SEL=id;RESULT=null;TAB='summary';history.replaceState(null,'','#job='+id);const j=JOBS.find(x=>x.id===id);if(j.state==='BLOCKS_COMPLETE')RESULT=await api('/jobs/'+id+'/result');renderJobs();renderDetail(j);}
+ const counts=FILTERS.map(([k,l,f])=>[k,l,JOBS.filter(f).length]);if(!counts.find(c=>c[0]===FILTER)[2])FILTER='all';
+ const shown=JOBS.filter(FILTERS.find(c=>c[0]===FILTER)[2]);
+ el.innerHTML=`<h2>Jobs <span class="chip">${JOBS.length}</span></h2><div class="tabs">`+counts.filter(([k,,n])=>n||k==='all').map(([k,l,n])=>`<span class="tab ${FILTER===k?'on':''}" data-f="${k}">${l}<b>${n}</b></span>`).join('')+'</div>'+shown.map(j=>`<div class="job ${j.id===SEL?'sel':''}" data-id="${j.id}"><div><div class="n" title="${esc(j.source.name)}">${esc(j.source.name)}</div><div class="t">${j.source.kind} · ${fmtT(j.created_at)} · ${j.id}</div></div><span class="chip ${j.state}">${j.state}</span></div>`).join('');
+ el.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{FILTER=t.dataset.f;renderJobs()});el.querySelectorAll('.job').forEach(n=>n.onclick=()=>select(n.dataset.id));}
+async function select(id){SEL=id;RESULT=null;TAB='summary';history.replaceState(null,'','#job='+id);const j=JOBS.find(x=>x.id===id);if(hasResult(j))RESULT=await api('/jobs/'+id+'/result');renderJobs();renderDetail(j);}
 
 function renderDetail(j){const s=j.source;const failed=j.state==='FAILED';const idx=STATES.indexOf(j.state);
- const steps=STATES.map((st,i)=>{const hit=j.stages.some(x=>x.state===st);const cls=failed?(hit?'done':''):(st===j.state&&j.state!=='BLOCKS_COMPLETE'?'cur':hit?'done':'');return `<span class="step ${cls}">${st}</span>`}).join('')+(failed?'<span class="step fail">FAILED</span>':'');
+ const steps=STATES.map((st,i)=>{const hit=j.stages.some(x=>x.state===st);const cls=failed?(hit?'done':''):(st===j.state&&!TERMINAL.includes(j.state)?'cur':hit?'done':'');return `<span class="step ${cls}">${st}</span>`}).join('')+(failed?'<span class="step fail">FAILED</span>':'');
  const last=j.stages[j.stages.length-1];
  let html=`<h2>Job ${j.id} <span class="chip ${j.state}">${j.state}</span></h2>
  <dl class="kv"><dt>Source</dt><dd>${esc(s.name)}</dd><dt>Kind</dt><dd>${s.kind}${s.path?' · '+esc(s.path):''}${s.url?' · '+esc(s.url):''}</dd><dt>Size / duration</dt><dd>${bytes(s.size_bytes)} · ${dur(s.duration_seconds)}</dd><dt>Provider</dt><dd>${j.provider} · ${j.model}</dd></dl>

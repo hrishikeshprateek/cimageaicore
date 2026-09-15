@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from services.block_engine.media import seconds_to_ts, ts_to_seconds
 from services.block_engine.schemas import KeyMomentBlock, PersonBlock, QuoteBlock, TranscriptSegment, VideoAnalysisV1, provider_json_schema
-from services.video_composer.captions import CaptionCue, cues_for_window, is_generic_speaker
+from services.video_composer.captions import CaptionCue, cues_for_window, is_generic_speaker, sentence_spans
 from services.video_composer.renderer import LowerThird
 
 log = logging.getLogger(__name__)
@@ -62,17 +62,35 @@ def _norm_name(s: str) -> str:
     return re.sub(r"[^a-z0-9ऀ-ॿ]+", " ", s.lower()).strip()
 
 
-def _segment_at(segments: list[TranscriptSegment], t: float) -> tuple[float, float] | None:
+def _segment_at(segments: list[TranscriptSegment], t: float) -> tuple[float, float, TranscriptSegment] | None:
     best = None
     for seg in segments:
         s, e = ts_to_seconds(seg.start_time), ts_to_seconds(seg.end_time)
         if s is None or e is None:
             continue
         if s <= t <= max(e, s + 1):
-            return float(s), float(max(e, s + 1))
+            return float(s), float(max(e, s + 1)), seg
         if best is None or abs(s - t) < abs(best[0] - t):
-            best = (float(s), float(max(e, s + 1)))
+            best = (float(s), float(max(e, s + 1)), seg)
     return best
+
+
+def _snap_in(seg: TranscriptSegment | None, t: float, *, default_lead: float = 4.0, max_lead: float = 12.0) -> float:
+    """Start at the (estimated) beginning of the sentence that contains `t`, if that is not too far back."""
+    starts = [s for s, _, _ in sentence_spans(seg)] if seg else []
+    before = [s for s in starts if s <= t + 0.5]
+    if before and t - max(before) <= max_lead:
+        return max(before)
+    return t - default_lead
+
+
+def _snap_out(seg: TranscriptSegment | None, t_end: float, *, max_tail: float = 8.0) -> float:
+    """End at the (estimated) end of the sentence that contains `t_end`, if that is not too far ahead."""
+    ends = [e for _, e, _ in sentence_spans(seg)] if seg else []
+    after = [e for e in ends if e >= t_end - 0.5]
+    if after and min(after) - t_end <= max_tail:
+        return min(after)
+    return t_end
 
 
 def _clamp_window(t_in: float, t_out: float, duration: float | None, lim: CutLimits, *, must_include: tuple[float, float] | None = None) -> tuple[float, float]:
@@ -149,13 +167,9 @@ def propose_cuts(analysis: VideoAnalysisV1, duration: float | None, lim: CutLimi
         words = len(q.text.split())
         q_dur = max(2.0, words / WORDS_PER_SECOND + 0.8)
         seg = _segment_at(segs, t)
-        if seg and seg[0] <= t:
-            t_in = seg[0] if t - seg[0] <= 10 else t - 4.0
-            t_out = t + q_dur + 1.5
-            if 0 <= seg[1] - t_out <= 8:            # finish the speaker turn when it ends soon after
-                t_out = seg[1]
-        else:
-            t_in, t_out = t - 4.0, t + q_dur + 1.5
+        inside = seg is not None and seg[0] <= t <= seg[1]
+        t_in = _snap_in(seg[2] if inside else None, t)
+        t_out = _snap_out(seg[2] if inside else None, t + q_dur + 1.0)
         t_in, t_out = _clamp_window(t_in, t_out, duration, lim, must_include=(t, t + q_dur))
         score = 1.0
         mom = moments_in(t_in, t_out)
@@ -178,10 +192,9 @@ def propose_cuts(analysis: VideoAnalysisV1, duration: float | None, lim: CutLimi
         if t is None or (duration is not None and t > duration + 2):
             continue
         seg = _segment_at(segs, t)
-        t_in = max(seg[0], t - 3.0) if seg and seg[0] <= t else t - 3.0
-        t_out = t + lim.target_seconds * 0.7
-        if seg and t < seg[1] <= t_out + 6:
-            t_out = seg[1]
+        inside = seg is not None and seg[0] <= t <= seg[1]
+        t_in = _snap_in(seg[2] if inside else None, t, default_lead=3.0)
+        t_out = _snap_out(seg[2] if inside else None, t + lim.target_seconds * 0.6)
         t_in, t_out = _clamp_window(t_in, t_out, duration, lim, must_include=(t, t + 3))
         speaker = next((s.speaker for s in segs if (ts_to_seconds(s.start_time) or 1e9) <= t <= (ts_to_seconds(s.end_time) or -1)), None)
         score = 0.6 + _IMPORTANCE[k.importance]
@@ -265,7 +278,6 @@ def refine_with_ai(provider, analysis: VideoAnalysisV1, duration: float | None, 
                    prompt_version: str = "cuts_v1", institution_context: str = "") -> tuple[list[CutProposal], str | None]:
     """Ask the gateway for better windows. Returns (cuts, warning). Never raises: falls back to `rule_based`."""
     from services.ai_gateway.base import ProviderError
-    from services.ai_gateway.structured import generate_structured
 
     lim = lim or CutLimits()
     try:
@@ -277,11 +289,11 @@ def refine_with_ai(provider, analysis: VideoAnalysisV1, duration: float | None, 
             "blocks": _blocks_digest(analysis, duration),
             "rule_based": "\n".join(f"- {p.in_ts} -> {p.out_ts} ({p.duration:.0f}s) {p.source}: {p.title}" for p in rule_based) or "- none",
         }
-        raw = generate_structured(provider, system_instruction=_fill(system, values), prompt=_fill(user, values), json_schema=provider_json_schema(AICutsV1))
+        raw = provider.generate_structured(_fill(system, values), _fill(user, values), provider_json_schema(AICutsV1))
         text = raw.text.strip()
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
         parsed = AICutsV1.model_validate(json.loads(text))
-    except (ProviderError, ValidationError, json.JSONDecodeError, FileNotFoundError, KeyError) as exc:
+    except (ProviderError, ValidationError, json.JSONDecodeError, FileNotFoundError, KeyError, AttributeError, TypeError) as exc:
         log.warning("AI cut refinement unavailable, keeping rule-based cuts: %s", exc)
         return rule_based, f"AI refinement unavailable ({type(exc).__name__}); rule-based cuts shown"
 

@@ -284,17 +284,20 @@ def render_jobs_in_process(jobs: list[TextJob]) -> list[TextResult]:
 def render_jobs(jobs: list[TextJob], *, fribidi_override: Path | None = None) -> tuple[list[TextResult], bool]:
     """Render in-process, or in a child interpreter that can load FriBiDi (macOS/Homebrew) when a job needs shaping.
 
-    Returns (results, shaped) where `shaped` says whether a shaping engine (raqm) laid out the text.
+    Returns (results, shaped): `shaped` is False only when complex-script text had to be drawn without a shaping engine.
     """
     if not jobs:
-        return [], shaping_available()
+        return [], True
     complex_text = any(needs_shaping(j.text if isinstance(j, CaptionJob) else f"{j.name} {j.role or ''}") for j in jobs)
+    if not complex_text:
+        return render_jobs_in_process(jobs), True
+    if shaping_available():
+        return render_jobs_in_process(jobs), True
     d = fribidi_dir(fribidi_override)
-    if complex_text and not shaping_available() and d is not None and platform.system() == "Darwin":
+    if d is not None and platform.system() == "Darwin":
         return _render_in_child(jobs, d)
-    if complex_text and not shaping_available():
-        log.warning("complex-script text without a shaping engine (install fribidi so Pillow can use libraqm)")
-    return render_jobs_in_process(jobs), shaping_available()
+    log.warning("complex-script text without a shaping engine (install fribidi so Pillow can use libraqm)")
+    return render_jobs_in_process(jobs), False
 
 
 def _render_in_child(jobs: list[TextJob], lib_dir: Path) -> tuple[list[TextResult], bool]:

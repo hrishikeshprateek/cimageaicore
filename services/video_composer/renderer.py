@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from services.video_composer import ffmpeg as ff
 from services.video_composer.captions import CaptionCue, write_sidecars
 from services.video_composer.settings import ComposerSettings
-from services.video_composer.template import PRESETS, CaptionStyle, ResolvedLayout, Template, resolve_layout
+from services.video_composer.template import PRESETS, CaptionStyle, ResolvedLayout, Template, cover_crop, resolve_layout
 from services.video_composer.textrender import CaptionJob, FontPaths, LowerThirdJob, TextResult, render_jobs
 
 log = logging.getLogger(__name__)
@@ -41,7 +41,9 @@ class RenderSpec(BaseModel):
     cut_out: float
     preset: Literal["reels", "square", "landscape"] = "reels"
     template: str = "placeholder"
-    fit: Literal["contain", "cover"] | None = None
+    fit: Literal["contain", "cover", "auto"] | None = None   # None -> the layout's setting (placeholder layouts: auto)
+    focus_x: float = Field(0.5, ge=0, le=1)                   # which part of the source survives a cover-crop (0 left .. 1 right)
+    focus_y: float = Field(0.5, ge=0, le=1)                   # (0 top .. 1 bottom)
     captions: list[CaptionCue] = Field(default_factory=list)
     captions_enabled: bool = True
     lower_third: LowerThird | None = None
@@ -60,6 +62,7 @@ class RenderSpec(BaseModel):
 
 class RenderOutput(BaseModel):
     output_path: str
+    poster_path: str | None = None
     captions_srt: str | None = None
     captions_ass: str | None = None
     width: int
@@ -156,9 +159,9 @@ def build_command(spec: RenderSpec, template: Template, layout: ResolvedLayout, 
         inputs += 1
 
     v = layout.video_rect
-    fit = spec.fit or lay.fit
-    if fit == "cover":
-        vid_chain = f"scale={v.w}:{v.h}:force_original_aspect_ratio=increase:flags=lanczos,crop={v.w}:{v.h}"
+    if layout.fit == "cover":
+        cc = cover_crop(spec.source_width, spec.source_height, v, spec.focus_x, spec.focus_y)
+        vid_chain = f"scale={cc.scaled_w}:{cc.scaled_h}:flags=lanczos,crop={cc.w}:{cc.h}:{cc.x}:{cc.y}"
     else:
         vid_chain = f"scale={v.w}:{v.h}:flags=lanczos"
     graph = [
@@ -169,7 +172,8 @@ def build_command(spec: RenderSpec, template: Template, layout: ResolvedLayout, 
     cur = "c0"
     n = 1
     for pl, idx in zip(layers + texts, idx_of):
-        en = f":enable='between(t,{_f(pl.start)},{_f(pl.end)})'" if pl.start is not None and pl.end is not None else ""
+        # gte*lt, not between(): between() is inclusive at both ends, so two consecutive cues would overlap for one frame
+        en = f":enable='gte(t,{_f(pl.start)})*lt(t,{_f(pl.end)})'" if pl.start is not None and pl.end is not None else ""
         graph.append(f"[{cur}][{idx}:v]overlay=x={pl.x}:y={pl.y}:format=yuv444:eof_action=repeat{en}[c{n}]")
         cur = f"c{n}"
         n += 1
@@ -204,7 +208,7 @@ def render(spec: RenderSpec, template: Template, settings: ComposerSettings, out
         raise ValueError(f"template '{template.name}' has no layout for preset '{spec.preset}'")
     if spec.cut_out <= spec.cut_in:
         raise ValueError("cut_out must be after cut_in")
-    missing = template.missing_files()
+    missing = template.missing_files(spec.preset)
     if missing:
         raise FileNotFoundError(f"template '{template.name}' is missing layer files: {', '.join(missing)}")
     fonts = font_paths(template, settings)
@@ -231,8 +235,10 @@ def render(spec: RenderSpec, template: Template, settings: ComposerSettings, out
         cmd = build_command(spec, template, layout, layers, texts, output, ass_path=ass, fonts_dir=Path(fonts.regular).parent, threads=settings.ffmpeg_threads)
         seconds, tail = ff.run(cmd, timeout=settings.ffmpeg_timeout_seconds, log_path=work / "ffmpeg.log")
         info = ff.probe(output)
+        poster = ff.poster_frame(output, output.with_suffix(".jpg"), at=min(1.0, max(0.0, info.duration / 2)))
         return RenderOutput(
-            output_path=str(output), captions_srt=str(srt) if srt else None, captions_ass=str(ass) if ass else None,
+            output_path=str(output), poster_path=str(poster) if poster else None,
+            captions_srt=str(srt) if srt else None, captions_ass=str(ass) if ass else None,
             width=info.width, height=info.height, duration=info.duration, size_bytes=info.size_bytes or output.stat().st_size,
             ffmpeg_command=cmd, render_seconds=round(time.monotonic() - started, 2), layout=layout, text_shaping=bool(shaped), log_tail=tail[-1500:],
         )

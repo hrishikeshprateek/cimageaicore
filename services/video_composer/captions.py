@@ -69,6 +69,22 @@ def _seg_bounds(seg: TranscriptSegment) -> tuple[float, float] | None:
     return float(s), float(e)
 
 
+def sentence_spans(seg: TranscriptSegment) -> list[tuple[float, float, str]]:
+    """Estimated (start, end, text) of each sentence in a segment - time is split in proportion to length."""
+    b = _seg_bounds(seg)
+    if b is None:
+        return []
+    s, e = b
+    sentences = [x for x in _SENTENCE_END.split(" ".join(seg.text.split())) if x]
+    total = sum(len(x) for x in sentences) or 1
+    out, t = [], s
+    for x in sentences:
+        d = (e - s) * len(x) / total
+        out.append((round(t, 2), round(t + d, 2), x))
+        t += d
+    return out
+
+
 def cues_for_window(segments: Iterable[TranscriptSegment], cut_in: float, cut_out: float, *, max_chars_per_line: int = 34,
                     max_lines: int = 2, min_seconds: float = 0.8) -> list[CaptionCue]:
     """Caption cues (times relative to `cut_in`) for the transcript that overlaps [cut_in, cut_out]."""

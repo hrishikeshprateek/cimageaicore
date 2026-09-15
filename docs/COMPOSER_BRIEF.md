@@ -59,3 +59,24 @@ reference output, target channels.
 - Synthetic clip + placeholder template → valid MP4 in all three presets, captions visible, tests pass offline.
 - A real analysed job → 2–3 proposed cuts → preview → render, from the UI.
 - Swapping the placeholder for real assets is config only.
+
+## Framing (added 2026-09-14)
+Most sources are 16:9 talks; the reel's clip window is 1080×920. Letterboxing there shrinks the clip
+to a 608px strip, so a layout's `fit` is now `contain | cover | auto` (default **auto**):
+
+- **auto** fills the window and crops (cover) unless the crop would keep < 45% of the source
+  (`template.COVER_MIN_RETAINED`) — a 16:9 clip in the reel keeps 66% → cropped; a 9:16 phone clip in
+  the 16:9 preset would keep 32% → letterboxed. Landscape layouts keep an explicit `contain`.
+- The crop window is placed by `focus_x/focus_y` (0..1, default centre) on the `RenderSpec` / compose
+  request. `GET /jobs/{id}/framing?cut_in&cut_out&preset` resolves the fit, samples 5 frames across the
+  cut, finds faces with OpenCV YuNet (`services/video_composer/framing.py`, model vendored under
+  `models/`; `pip install -e ".[composer]"`) and returns a focus that keeps the people in frame.
+  Without OpenCV the suggestion is the centre and the UI slider still works.
+- `GET /jobs/{id}/frame?at=` returns one JPEG for the crop preview in the composer's **Framing** panel
+  (Auto / Fill / Fit, focus slider, ↻ faces). `cover_crop()` produces explicit pixel values so the
+  ffmpeg `scale=…,crop=W:H:X:Y` chain and the preview box agree exactly.
+- Online (YouTube) jobs have no local file and cannot be composed; a source file must be attached/re-analysed.
+
+## UI location (2026-09-15)
+The composer UI now lives inside the single admin app: `web/admin/views/composer.js` (same features, Material styling).
+`web/composer.html` is retired under `web/_legacy/` and `/composer` redirects to `/admin#composer`. API routes are unchanged.

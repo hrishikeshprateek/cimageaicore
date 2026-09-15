@@ -6,6 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 
+from apps.api.ingest import submit_source
 from apps.api.jobs import Job, JobState
 from services.block_engine import sources
 from services.block_engine.media import ffprobe_available
@@ -63,21 +64,10 @@ async def analyze(
     except sources.SourceError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    engine = request.app.state.engine
-    store = request.app.state.store
-
-    existing = store.find_existing(source.info)
-    if existing is not None:  # same bytes / same URL already processed or in progress -> no duplicate job
-        if source.info.kind == "upload" and source.path:
-            source.path.unlink(missing_ok=True)
-        store.audit("api", "job.deduplicated", "job", existing.id, {"name": source.info.name})
-        return {"job_id": existing.id, "state": existing.state, "deduplicated": True, "source": existing.source.model_dump()}
-
-    job = store.create(source.info, engine.provider.name, engine.provider.model)
-    if source.info.kind != "online":
-        store.transition(job.id, JobState.STABLE, {"size_bytes": source.info.size_bytes})
-    request.app.state.runner.submit(job.id, lambda on_stage: engine.analyze(job.id, source, on_stage))
-    return {"job_id": job.id, "state": JobState.QUEUED, "deduplicated": False, "source": source.info.model_dump()}
+    sub = submit_source(request.app.state, source)
+    if sub.deduplicated:
+        return {"job_id": sub.job.id, "state": sub.job.state, "deduplicated": True, "source": sub.job.source.model_dump()}
+    return {"job_id": sub.job.id, "state": JobState.QUEUED, "deduplicated": False, "source": source.info.model_dump()}
 
 
 @router.get("/jobs")
@@ -125,8 +115,16 @@ def search(
     store = request.app.state.store
     qvec = None
     if mode != "keyword" and store.supports_vectors:
-        qvec = request.app.state.embedder.embed_query(q)
-    return store.search(q, block_type, min(max(limit, 1), 100), query_vector=qvec, media_id=media_id, mode=mode)
+        try:
+            qvec = request.app.state.embedder.embed_query(q)
+        except Exception as exc:  # noqa: BLE001 - embedder down (Ollama stopped, API unreachable): degrade to keyword, don't 500
+            if mode == "vector":
+                raise HTTPException(503, f"vector search unavailable: {exc}") from exc
+            log.warning("embedder unavailable (%s); hybrid search degraded to keyword-only", exc)
+            request.app.state.store.audit("api", "search.degraded", None, None, {"error": str(exc)[:300]})
+            mode = "keyword"
+    return store.search(q, block_type, min(max(limit, 1), 100), query_vector=qvec, media_id=media_id, mode=mode,
+                        vector_model=request.app.state.embedder.model)
 
 
 def _job_or_404(request: Request, job_id: str) -> Job:

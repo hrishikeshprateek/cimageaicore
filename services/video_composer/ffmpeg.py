@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import time
@@ -39,18 +40,13 @@ def capabilities() -> dict:
     if FFMPEG is None:
         return {"ffmpeg": None, "ffprobe": FFPROBE, "filters": [], "encoders": [], "version": None}
 
-    def names(kind: str, col: int) -> set[str]:
+    def names(kind: str, pattern: str) -> set[str]:
         out = subprocess.run([FFMPEG, "-hide_banner", f"-{kind}"], capture_output=True, text=True, check=False, timeout=30).stdout
-        found = set()
-        for ln in out.splitlines():
-            parts = ln.split()
-            if len(parts) > col and parts[0] and not parts[0].isalpha() and parts[0] != "=":
-                found.add(parts[col])
-        return found
+        return {m.group(1) for m in (re.match(pattern, ln) for ln in out.splitlines()) if m}
 
     version = subprocess.run([FFMPEG, "-version"], capture_output=True, text=True, check=False, timeout=30).stdout.splitlines()[:1]
-    filters = names("filters", 1)
-    encoders = names("encoders", 1)
+    filters = names("filters", r"^\s*[TSC.]{1,3}\s+(\S+)\s+\S+->\S+")      # " TS. overlay  VV->V  ..."
+    encoders = names("encoders", r"^\s*[VASFXBD.]{6}\s+(\S+)\s")             # " V....D libx264  ..."
     wanted_f = ["overlay", "scale", "pad", "crop", "fps", "format", "subtitles", "drawtext", "afade"]
     wanted_e = ["libx264", "h264_videotoolbox", "h264_nvenc", "aac", "prores_ks", "libvpx-vp9"]
     return {
@@ -135,6 +131,18 @@ def run(cmd: list[str], *, timeout: float = 900, log_path: Path | None = None) -
     if proc.returncode != 0:
         raise FFmpegError(f"ffmpeg exited with {proc.returncode}: {tail[-600:]}")
     return seconds, tail
+
+
+def poster_frame(video: Path, out: Path, *, at: float = 1.0, max_width: int = 720) -> Path | None:
+    """One JPEG frame for previews/thumbnails; returns None (never raises) if extraction fails."""
+    if FFMPEG is None:
+        return None
+    proc = subprocess.run([FFMPEG, "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", str(video), "-frames:v", "1", "-vf", f"scale='min({max_width},iw)':-2",
+                           "-q:v", "3", str(out)], capture_output=True, text=True, timeout=60, check=False)
+    if proc.returncode != 0 or not out.exists():
+        log.warning("poster frame failed for %s: %s", video.name, proc.stderr[-200:])
+        return None
+    return out
 
 
 def make_test_clip(path: Path, *, seconds: float = 12, width: int = 1280, height: int = 720, audio: bool = True, fps: int = 30) -> Path:

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CIMAGE AI</title>
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,300..800&family=Google+Sans+Code:wght@300..700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,300..500,0..1,0&display=block">
+<link rel="stylesheet" href="/static/app.css">
+<script>
+  // If the Material Symbols font can't be fetched (offline server, blocked CDN) fall back to the inline SVG icons.
+  (function () {
+    var done = false, mark = function () { if (!done) { done = true; document.documentElement.classList.add('no-msym'); } };
+    if (!document.fonts || !document.fonts.load) return;
+    document.fonts.load('20px "Material Symbols Outlined"').then(function (f) { if (!f.length) mark(); }).catch(mark);
+    setTimeout(function () { if (!document.fonts.check('20px "Material Symbols Outlined"')) mark(); }, 4000);
+  })();
+</script>
+<link rel="icon" type="image/png" href="/static/assets/favicon.png">
+</head>
+<body>
+<div class="shell">
+  <nav class="nav" aria-label="Main">
+    <a class="brand" href="#overview" title="CIMAGE AI · Media Platform"><img class="logo-full" src="/static/assets/cimage-logo.png" alt="CIMAGE Group of Institutions"><img class="logo-mark" src="/static/assets/cimage-emblem.png" alt="CIMAGE"><span class="brand-sub">Powered by cimage.ai</span></a>
+    <div id="navitems"></div>
+    <div class="foot" id="navfoot">connecting…</div>
+  </nav>
+  <main>
+    <header class="topbar">
+      <div><h1 id="title">Overview</h1><div class="sub" id="subtitle"></div></div>
+      <span class="sp"></span>
+      <div class="searchbar"><span class="icn"><span class="msym l">search</span><svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></span><input id="q" type="search" placeholder="Search the knowledge base… who spoke about placements?" autocomplete="off"><kbd>/</kbd></div>
+      <span class="row gap4" id="pills"></span>
+      <button class="btn icon" id="refresh" title="Refresh"><span class="icn"><span class="msym l">refresh</span><svg class="ic" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg></span></button>
+    </header>
+    <section class="page" id="view"></section>
+  </main>
+</div>
+<div class="snack" id="snack"></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

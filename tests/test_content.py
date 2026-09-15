@@ -114,6 +114,8 @@ def pg_app(test_db_url, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("NAS_ALLOWED_ROOTS", str(tmp_path))
     monkeypatch.setenv("GEMINI_API_KEY", "")
+    monkeypatch.setenv("WATCHER_ENABLED", "false")
+    monkeypatch.setenv("AUTO_DRAFT", "false")
     config.get_settings.cache_clear()
     from fastapi.testclient import TestClient
     from apps.api.main import create_app
@@ -175,3 +177,47 @@ def test_end_to_end_video_to_reviewed_draft(pg_app, tiny_video):
         time.sleep(0.1)
     # the mock embedder still finds *something* by hash collision or none - either a draft or a clean failure is acceptable
     assert bad["status"] in ("new", "failed")
+
+
+def test_auto_draft_turns_the_best_opportunity_into_a_review_draft(test_db_url, tmp_path, monkeypatch, tiny_video):  # noqa: F811
+    """AUTO_DRAFT=true: video -> blocks -> opportunities -> a blog draft appears in the review queue with nobody clicking."""
+    import time
+
+    import psycopg
+    from apps.api import config
+
+    for k, v in {"AI_PROVIDER": "mock", "EMBEDDING_PROVIDER": "mock", "DATABASE_URL": test_db_url, "DATA_DIR": str(tmp_path / "data"),
+                 "NAS_ALLOWED_ROOTS": str(tmp_path), "GEMINI_API_KEY": "", "AUTO_DRAFT": "true", "AUTO_DRAFT_MAX_PER_VIDEO": "1"}.items():
+        monkeypatch.setenv(k, v)
+    config.get_settings.cache_clear()
+    from fastapi.testclient import TestClient
+    from apps.api.main import create_app
+
+    try:
+        with TestClient(create_app()) as client:
+            assert client.get("/api/v1/admin/overview").json()["system"]["auto_draft"] is True
+            with tiny_video.open("rb") as f:
+                job_id = client.post("/api/v1/analyze", files={"file": (tiny_video.name, f, "video/mp4")}).json()["job_id"]
+            draft = None
+            for _ in range(200):
+                drafts = client.get("/api/v1/drafts").json()
+                if drafts and drafts[0]["status"] in ("new", "failed"):
+                    draft = drafts[0]
+                    break
+                time.sleep(0.1)
+            assert draft is not None and draft["status"] == "new", draft
+            draft = client.get(f"/api/v1/drafts/{draft['id']}").json()          # the list is a summary; the body lives here
+            opp = client.get("/api/v1/opportunities", params={"status": "drafted"}).json()
+            assert len(opp) == 1 and opp[0]["job_id"] == job_id and draft["opportunity_id"] == opp[0]["id"]
+            assert client.get("/api/v1/opportunities", params={"status": "new"}).json() == []
+            assert draft["title"].startswith("[MOCK]") and draft["citations"]
+            ov = client.get("/api/v1/admin/overview").json()
+            assert ov["content"]["awaiting_review"] == 1 and ov["content"]["drafts"] == {"new": 1} and ov["jobs"]["by_state"] == {"CONTENT_CANDIDATE": 1}
+            assert any(a["action"] == "draft.auto_created" for a in ov["audit"])
+            # the reviewer approves it from the admin panel's API
+            assert client.post(f"/api/v1/drafts/{draft['id']}/status", json={"status": "approved"}).json()["status"] == "approved"
+            assert client.get("/api/v1/admin/overview").json()["content"]["drafts"] == {"approved": 1}
+    finally:
+        config.get_settings.cache_clear()
+        with psycopg.connect(test_db_url, autocommit=True) as conn:
+            conn.execute("TRUNCATE audit_log, knowledge_blocks, processing_jobs, media, content_opportunities, drafts, draft_versions, agent_runs CASCADE")

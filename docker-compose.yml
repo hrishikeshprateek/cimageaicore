@@ -1,24 +1,33 @@
-# Phase 1 foundation: API + PostgreSQL/pgvector + Redis.
-# V0.1 only needs the API; postgres/redis are wired for Phase 2-3.
+# API + PostgreSQL/pgvector + Redis + Ollama (local embeddings, no API cost).
+# First start:  docker compose up -d && docker compose exec ollama ollama pull embeddinggemma
+# Then open http://<host>:8000/admin. Videos dropped into the watched folder (NAS_WATCH_DIR below) are analysed on their own.
 services:
   api:
+    image: ${API_IMAGE:-cimage-ai/api:0.8.0}   # `docker compose build` tags the local build; set API_IMAGE to pull a published one
     build:
       context: .
       dockerfile: docker/api.Dockerfile
     env_file: .env
+    restart: unless-stopped   # come back after a reboot / Docker restart; only `docker compose stop` keeps it down
     environment:
       DATA_DIR: /data
       NAS_ALLOWED_ROOTS: /nas
       DATABASE_URL: postgresql://cimage:cimage@postgres:5432/cimage_ai
       REDIS_URL: redis://redis:6379/0
+      EMBEDDING_PROVIDER: ollama     # EmbeddingGemma on this box; set gemini to pay for the API instead
+      OLLAMA_URL: http://ollama:11434
+      WATCHER_ENABLED: "true"        # scan the folder below; new videos -> analysis -> blocks -> embeddings -> draft
+      WATCH_ROOTS: /nas/AI-Test
+      AUTO_DRAFT: "true"             # the best opportunity of every finished video becomes a blog draft for review
     ports: ["8000:8000"]
     volumes:
       - ./data:/data
-      - ./data/nas-test:/nas:ro      # later: the real NAS mount (read-only)
-    depends_on: [postgres, redis]
+      - ${NAS_WATCH_DIR:-./data/nas-test}:/nas:ro   # the NAS share (read-only); set NAS_WATCH_DIR=/mnt/nas in .env on the server
+    depends_on: [postgres, redis, ollama]
 
   postgres:
     image: pgvector/pgvector:pg17
+    restart: unless-stopped   # come back after a reboot / Docker restart; only `docker compose stop` keeps it down
     environment:
       POSTGRES_USER: cimage
       POSTGRES_PASSWORD: cimage
@@ -30,9 +39,17 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped   # come back after a reboot / Docker restart; only `docker compose stop` keeps it down
     ports: ["6380:6379"]   # 6380 on the host: a local Redis owns 6379
     volumes: [redisdata:/data]
+
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    ports: ["11434:11434"]   # handy for `ollama` CLI / scripts on the host; drop if the box is exposed
+    volumes: [ollama:/root/.ollama]   # pulled models live here (embeddinggemma ≈ 620 MB)
 
 volumes:
   pgdata:
   redisdata:
+  ollama:

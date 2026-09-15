@@ -1,6 +1,8 @@
 """What the Blog Agent must return (strict JSON)."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -27,3 +29,19 @@ class BlogDraftV1(BaseModel):
     hero_block_id: str | None = Field(description="The [id=...] of a media block that would make the best featured image, or null.")
     social: SocialPosts
     evidence_gaps: list[str] = Field(description="Things you would have liked to say but the evidence did not support - left out of the article.")
+
+
+class ImagePlacement(BaseModel):
+    image_id: str = Field(description="An [img=...] value from the available images list.")
+    placement: Literal["hero", "inline"] = Field(description="'hero' = the one featured image at the top; 'inline' = placed in the body where its [img=...] line is.")
+    caption: str = Field(description="One factual sentence shown under the picture. Only names, places and events the evidence supports.")
+    alt_text: str = Field(description="Short accessible description of what is visible in the picture.")
+
+
+class BlogDraftV2(BlogDraftV1):
+    """v2 = v1 + pictures. Inline pictures are `[img=<id>]` lines in body_markdown, listed here with captions."""
+
+    images: list[ImagePlacement] = Field(
+        default_factory=list,
+        description="The hero image and 2-5 inline images chosen ONLY from the available images list; every inline one must also appear as an [img=<id>] line in body_markdown.",
+    )

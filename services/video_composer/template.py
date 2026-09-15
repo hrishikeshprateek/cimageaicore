@@ -17,6 +17,10 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 Preset = Literal["reels", "square", "landscape"]
+Fit = Literal["contain", "cover", "auto"]
+# "auto" fills the clip window (cover) unless the crop would throw away too much of the source -
+# a 16:9 talk in the 9:16 reel keeps 66% and gets cropped; a 9:16 phone clip in the 16:9 preset would keep 32% and is letterboxed instead.
+COVER_MIN_RETAINED = 0.45
 PRESETS: dict[str, tuple[int, int]] = {"reels": (1080, 1920), "square": (1080, 1080), "landscape": (1920, 1080)}
 PRESET_LABELS = {"reels": "Reels / Shorts 9:16", "square": "Feed 1:1", "landscape": "YouTube 16:9"}
 LAYER_EXTENSIONS = {".png", ".mov", ".webm"}
@@ -96,7 +100,7 @@ class Layout(BaseModel):
     height: int
     video_zone: Rect                                   # the source clip is fitted inside this rectangle
     video_align: Literal["center", "top", "bottom"] = "center"
-    fit: Literal["contain", "cover"] = "contain"
+    fit: Fit = "auto"                                  # contain = letterbox, cover = fill + crop, auto = decide from the source aspect
     background: str = "#000000"
     layers: list[Layer] = Field(default_factory=list)
     caption_zone: Rect | None = None                   # None = below the clip when there is room, else over its bottom edge
@@ -148,10 +152,11 @@ class Template(BaseModel):
             return self.dir / rel
         return default
 
-    def missing_files(self) -> list[str]:
+    def missing_files(self, preset: str | None = None) -> list[str]:
         return [
-            f"{preset}:{layer.name} -> {layer.file}"
-            for preset, lay in self.layouts.items()
+            f"{p}:{layer.name} -> {layer.file}"
+            for p, lay in self.layouts.items()
+            if preset is None or p == preset
             for layer in lay.layers
             if layer.enabled and (self.dir is None or not (self.dir / layer.file).exists())
         ]
@@ -215,11 +220,48 @@ def _even(n: float) -> int:
     return v if v % 2 == 0 else v - 1
 
 
+def effective_fit(fit: str, src_w: int, src_h: int, zone: Rect) -> Literal["contain", "cover"]:
+    """Resolve "auto" against the real source aspect; contain/cover pass through."""
+    if fit != "auto":
+        return fit  # type: ignore[return-value]
+    if src_w <= 0 or src_h <= 0:
+        raise ValueError("source dimensions must be positive")
+    scale = max(zone.w / src_w, zone.h / src_h)
+    retained = (zone.w * zone.h) / (src_w * scale * src_h * scale)
+    return "cover" if retained >= COVER_MIN_RETAINED else "contain"
+
+
+class CoverCrop(BaseModel):
+    """How the source is scaled and cropped to fill a rectangle: scale to (scaled_w, scaled_h), then crop (w, h) at (x, y)."""
+
+    scaled_w: int
+    scaled_h: int
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+def cover_crop(src_w: int, src_h: int, rect: Rect, focus_x: float = 0.5, focus_y: float = 0.5) -> CoverCrop:
+    """Scale the source up to cover `rect`, then pick the crop window along the overflowing axis.
+
+    focus_x / focus_y (0..1) say which part of the source to keep: 0 = left/top edge, 0.5 = centre, 1 = right/bottom edge.
+    Explicit pixel values (not ffmpeg expressions) so the render and the UI preview agree exactly."""
+    if src_w <= 0 or src_h <= 0:
+        raise ValueError("source dimensions must be positive")
+    scale = max(rect.w / src_w, rect.h / src_h)
+    sw, sh = max(rect.w, _even(src_w * scale)), max(rect.h, _even(src_h * scale))
+    fx, fy = min(max(focus_x, 0.0), 1.0), min(max(focus_y, 0.0), 1.0)
+    x = _even((sw - rect.w) * fx)
+    y = _even((sh - rect.h) * fy)
+    return CoverCrop(scaled_w=sw, scaled_h=sh, x=min(x, sw - rect.w), y=min(y, sh - rect.h), w=rect.w, h=rect.h)
+
+
 def fit_rect(src_w: int, src_h: int, zone: Rect, fit: str = "contain", align: str = "center") -> Rect:
     """Rectangle the source occupies inside `zone` (even dimensions, centred horizontally)."""
     if src_w <= 0 or src_h <= 0:
         raise ValueError("source dimensions must be positive")
-    if fit == "cover":
+    if effective_fit(fit, src_w, src_h, zone) == "cover":
         return Rect(x=zone.x, y=zone.y, w=_even(zone.w), h=_even(zone.h))
     scale = min(zone.w / src_w, zone.h / src_h)
     w, h = max(2, _even(src_w * scale)), max(2, _even(src_h * scale))
@@ -239,6 +281,7 @@ class ResolvedLayout(BaseModel):
     preset: str
     width: int
     height: int
+    fit: Literal["contain", "cover"]
     video_rect: Rect
     caption_rect: Rect
     caption_anchor: Literal["top", "bottom"]
@@ -252,7 +295,8 @@ class ResolvedLayout(BaseModel):
 def resolve_layout(layout: Layout, preset: str, src_w: int, src_h: int, *, fit: str | None, caption: CaptionStyle,
                    caption_line_px: int, lower_third: LowerThirdStyle) -> ResolvedLayout:
     """Place the clip, the caption area and the lower-third for one source. Pure geometry."""
-    video = fit_rect(src_w, src_h, layout.video_zone, fit or layout.fit, layout.video_align)
+    fit_eff = effective_fit(fit or layout.fit, src_w, src_h, layout.video_zone)
+    video = fit_rect(src_w, src_h, layout.video_zone, fit_eff, layout.video_align)
     font_size = layout.caption_font_size or caption.font_size
     cap_h_max = caption.max_lines * caption_line_px + 2 * caption.padding
     m = layout.caption_margin
@@ -276,7 +320,7 @@ def resolve_layout(layout: Layout, preset: str, src_w: int, src_h: int, *, fit: 
     if over:
         lt_bottom = min(lt_bottom, cap.y - layout.caption_gap)
     return ResolvedLayout(
-        preset=preset, width=layout.width, height=layout.height, video_rect=video, caption_rect=cap, caption_anchor=anchor,
+        preset=preset, width=layout.width, height=layout.height, fit=fit_eff, video_rect=video, caption_rect=cap, caption_anchor=anchor,
         captions_over_video=over, lower_third_x=lt_x, lower_third_bottom=lt_bottom, caption_font_size=font_size,
         lower_third_scale=layout.lower_third_scale,
     )

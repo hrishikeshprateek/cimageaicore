@@ -169,7 +169,8 @@ class JsonJobStore:
                 return job
         return None
 
-    def search(self, q: str, block_type: str | None = None, limit: int = 20, *, query_vector=None, media_id: str | None = None, mode: str = "hybrid") -> list[SearchHit]:
+    def search(self, q: str, block_type: str | None = None, limit: int = 20, *, query_vector=None, media_id: str | None = None, mode: str = "hybrid",
+               vector_model: str | None = None) -> list[SearchHit]:   # keyword only; vector args accepted for interface parity
         needle = q.lower().strip()
         hits: list[SearchHit] = []
         for job in self.list():
@@ -199,11 +200,11 @@ class JsonJobStore:
         (self.jobs_dir / f"{job.id}.json").write_text(job.model_dump_json(indent=2), encoding="utf-8")
 
 
-def embed_job_blocks(store, embedder, job_id: str) -> int:
-    """Embed every block of a job that has no vector yet. Returns the number embedded."""
+def embed_job_blocks(store, embedder, job_id: str | None) -> int:
+    """Embed every block of a job (all jobs when None) that has no vector yet or was embedded by another model. Returns the number embedded."""
     total = 0
     while True:
-        pending = store.pending_embeddings(job_id, limit=200)
+        pending = store.pending_embeddings(job_id, limit=200, model=embedder.model)
         if not pending:
             return total
         vectors = embedder.embed_documents([(r["title"], r["text"]) for r in pending])
@@ -213,10 +214,11 @@ def embed_job_blocks(store, embedder, job_id: str) -> int:
 class JobRunner:
     """Tiny in-process queue (thread pool). Stands in for Redis + workers until Phase 2."""
 
-    def __init__(self, store, worker_threads: int = 2, embedder=None, content_store=None):
+    def __init__(self, store, worker_threads: int = 2, embedder=None, content_store=None, on_content_candidate: Callable[[str, int], None] | None = None):
         self.store = store
         self.embedder = embedder
         self.content_store = content_store
+        self.on_content_candidate = on_content_candidate   # e.g. auto-draft; called with (job_id, opportunities created)
         self.pool = ThreadPoolExecutor(max_workers=worker_threads, thread_name_prefix="video-worker")
 
     def run_async(self, fn: Callable[[], None]) -> None:
@@ -256,6 +258,12 @@ class JobRunner:
                         self.store.transition(job_id, JobState.CONTENT_CANDIDATE, {"opportunities": created})
                 except Exception as exc:  # noqa: BLE001
                     log.exception("job %s opportunity extraction failed", job_id)
+                    return
+                if created and self.on_content_candidate is not None:
+                    try:
+                        self.on_content_candidate(job_id, created)
+                    except Exception:  # noqa: BLE001
+                        log.exception("job %s post-candidate hook failed", job_id)
 
         self.pool.submit(run)
 

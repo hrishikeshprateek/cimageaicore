@@ -114,6 +114,18 @@ def test_vector_and_hybrid_search(store, tiny_video):
     other_media = store.search("placeholder", query_vector=qv, media_id="nope")
     assert other_media == []
 
+    # switching embedding models: the old vectors are stale, get re-embedded, and are never compared with the new query vector
+    new_emb = MockEmbedder(dimensions=768, model="mock-embed-v2")
+    st = store.embedding_stats(new_emb.model)
+    assert st["stale"] == st["total"] and st["by_model"] == {"mock-embed-v1": st["total"]} and st["pending"] == 0
+    assert len(store.pending_embeddings(job.id, model=new_emb.model)) == st["total"] and store.pending_embeddings(job.id, model=emb.model) == []
+    assert store.search("placeholder quote", query_vector=qv, mode="vector", vector_model=new_emb.model) == []   # nothing embedded by v2 yet
+    assert store.search("placeholder quote", query_vector=qv, mode="vector", vector_model=emb.model)             # v1 vectors still searchable by v1
+    assert embed_job_blocks(store, new_emb, None) == st["total"]
+    st2 = store.embedding_stats(new_emb.model)
+    assert st2["stale"] == 0 and st2["by_model"] == {"mock-embed-v2": st["total"]}
+    assert store.search("placeholder quote", query_vector=new_emb.embed_query("placeholder quote"), mode="vector", vector_model=new_emb.model)
+
 
 def test_restart_reverts_interrupted_embedding_to_blocks_complete(store, tiny_video):
     job = store.create(from_upload(tiny_video).info, "mock", "mock-v1")

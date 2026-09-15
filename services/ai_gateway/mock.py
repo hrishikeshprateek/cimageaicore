@@ -112,6 +112,19 @@ class MockProvider:
         # The mock never emits invalid JSON; return the input unchanged so the engine surfaces the error.
         return RawModelOutput(text=invalid_text, model=self.model)
 
+    def describe_images(self, system_instruction: str, prompt: str, images: list[tuple[bytes, str]], json_schema: dict[str, Any], *,
+                        model: str | None = None, thinking_level: str | None = None) -> RawModelOutput:
+        """Canned shot descriptions: one 'good' tile per 'tile N' mentioned in the prompt, matched to the first block id it finds."""
+        tiles = [int(n) for n in re.findall(r"tile (\d+)", prompt)]
+        block_ids = re.findall(r"\[id=([^\]]+)\]", prompt)
+        out = {"tiles": [
+            {"tile": n, "visible": f"[MOCK] still {n}: placeholder description of what is visible", "people": 0,
+             "quality": "good" if i % 3 != 2 else "transition", "suitable_for": ["blog_hero"] if i == 0 else ["social_post"],
+             "matches_block": block_ids[0] if i == 0 and block_ids else None}
+            for i, n in enumerate(dict.fromkeys(tiles))
+        ]}
+        return RawModelOutput(text=json.dumps(out), model=model or self.model, usage={"input_tokens": 0, "output_tokens": 0, "thought_tokens": 0, "total_tokens": 0})
+
     def generate_structured(self, system_instruction: str, prompt: str, json_schema: dict[str, Any], *, model: str | None = None, thinking_level: str | None = None) -> RawModelOutput:
         """Canned blog draft that cites the evidence ids it finds in the prompt ([id=...])."""
         ids = [i for i in re.findall(r"\[id=([^\]]+)\]", prompt) if ":" in i]  # real block ids look like job:type:n

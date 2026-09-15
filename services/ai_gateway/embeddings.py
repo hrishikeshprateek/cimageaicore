@@ -1,7 +1,9 @@
-"""Embedding providers behind one interface (Gemini Embedding 2, or a deterministic mock).
+"""Embedding providers behind one interface: Gemini Embedding 2 (API), EmbeddingGemma via Ollama (local), or a deterministic mock.
 
 Documents are embedded as  "title: <title> | text: <content>"  and queries as
-"task: search result | query: <q>"  - the formats Google documents for gemini-embedding-2.
+"task: search result | query: <q>"  - the formats Google documents for gemini-embedding-2 *and* EmbeddingGemma,
+so the two are drop-in for each other (both 768-d). Vectors from different models are never comparable: the store
+tracks `embedding_model` per block, re-embeds blocks from another model, and vector search only matches the current one.
 """
 from __future__ import annotations
 
@@ -103,10 +105,78 @@ class GeminiEmbedder:
         raise RuntimeError("unreachable")
 
 
+class EmbeddingError(RuntimeError):
+    pass
+
+
+class OllamaEmbedder:
+    """A local embedding model served by Ollama (default: EmbeddingGemma-300M, 768-d, 100+ languages incl. Hindi).
+
+    No API cost and no internet needed at query time. Once per machine:  ollama pull embeddinggemma
+    Ollama's /api/embed takes a list of inputs and returns one vector per input.
+    """
+
+    name = "ollama"
+
+    def __init__(self, url: str = "http://localhost:11434", model: str = "embeddinggemma", dimensions: int = 768, *,
+                 batch_size: int = 32, timeout_seconds: float = 120, max_attempts: int = 3, transport=None):
+        import httpx
+
+        self._httpx = httpx
+        self.url = url.rstrip("/")
+        self.model = model
+        self.dimensions = dimensions
+        self.batch_size = batch_size
+        self.max_attempts = max_attempts
+        self.client = httpx.Client(base_url=self.url, timeout=timeout_seconds, transport=transport)
+
+    def embed_documents(self, items: list[tuple[str, str]]) -> list[list[float]]:
+        out: list[list[float]] = []
+        for i in range(0, len(items), self.batch_size):
+            chunk = items[i : i + self.batch_size]
+            out.extend(self._embed([f"title: {t} | text: {x}" for t, x in chunk]))
+        return out
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed([f"task: search result | query: {text}"])[0]
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        httpx = self._httpx
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                r = self.client.post("/api/embed", json={"model": self.model, "input": texts, "truncate": True})
+                if r.status_code == 404:
+                    raise EmbeddingError(f"Ollama at {self.url} has no model '{self.model}' - run:  ollama pull {self.model}")
+                if r.status_code >= 500:
+                    raise httpx.TransportError(f"Ollama returned {r.status_code}: {r.text[:200]}")
+                r.raise_for_status()
+                vecs = r.json().get("embeddings") or []
+                if len(vecs) != len(texts):
+                    raise EmbeddingError(f"embedding count mismatch: {len(vecs)} for {len(texts)} texts")
+                if vecs and len(vecs[0]) != self.dimensions:
+                    raise EmbeddingError(f"'{self.model}' returns {len(vecs[0])}-d vectors but EMBEDDING_DIMENSIONS={self.dimensions} "
+                                         "(the knowledge_blocks.embedding column); pick a model with matching dimensions")
+                return [_normalise(v) for v in vecs]
+            except httpx.TransportError as exc:   # daemon not up yet, model loading, connection reset
+                if attempt == self.max_attempts:
+                    raise EmbeddingError(f"Ollama unreachable at {self.url} ({exc}); is `ollama serve` running?") from exc
+                wait = 2.0 * attempt
+                log.warning("Ollama embedding attempt %d/%d failed (%s), retrying in %.0fs", attempt, self.max_attempts, exc, wait)
+                time.sleep(wait)
+        raise RuntimeError("unreachable")
+
+
+DEFAULT_MODELS = {"gemini": "gemini-embedding-2", "ollama": "embeddinggemma", "mock": "mock-embed-v1"}
+
+
 def build_embedder(settings) -> Embedder:
     kind = settings.embedding_provider
     if kind == "auto":
         kind = "gemini" if settings.gemini_api_key else "mock"
+    model = settings.embedding_model if settings.embedding_model not in ("", "auto") else DEFAULT_MODELS[kind]
     if kind == "gemini":
-        return GeminiEmbedder(settings.gemini_api_key, settings.embedding_model, settings.embedding_dimensions, batch_size=settings.embedding_batch_size)
-    return MockEmbedder(settings.embedding_dimensions)
+        return GeminiEmbedder(settings.gemini_api_key, model, settings.embedding_dimensions, batch_size=settings.embedding_batch_size)
+    if kind == "ollama":
+        return OllamaEmbedder(settings.ollama_url, model, settings.embedding_dimensions, batch_size=settings.embedding_batch_size,
+                              timeout_seconds=settings.ollama_timeout_seconds)
+    return MockEmbedder(settings.embedding_dimensions, model)

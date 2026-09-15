@@ -6,13 +6,18 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from apps.api.admin_routes import router as admin_router
+from apps.api.composer_routes import router as composer_router
 from apps.api.config import REPO_ROOT, get_settings
-from apps.api.jobs import JobRunner, JsonJobStore
-from apps.api.content_routes import router as content_router
+from apps.api.content_routes import auto_draft_job, router as content_router
+from apps.api.ingest import submit_source
+from apps.api.jobs import JobRunner, JsonJobStore, embed_job_blocks
 from apps.api.routes import router
+from services.block_engine import sources
+from services.ingestion.watcher import FolderWatcher
 from services.ai_gateway import build_provider
 from services.ai_gateway.embeddings import build_embedder
 from services.block_engine.engine import BlockEngine
@@ -35,11 +40,15 @@ async def lifespan(app: FastAPI):
     loaded = store.load()
     embedder = build_embedder(settings)
     content = None
+    images = None
     if getattr(store, "supports_vectors", False):
         from apps.api.content_store import ContentStore
+        from services.media_library.store import ImageStore
 
         content = ContentStore(store.pool)
-    runner = JobRunner(store, settings.worker_threads, embedder=embedder, content_store=content)
+        images = ImageStore(store.pool, settings.data_dir / "images")
+    runner = JobRunner(store, settings.worker_threads, embedder=embedder, content_store=content,
+                       on_content_candidate=lambda job_id, n: auto_draft_job(app.state, job_id))
     retriever = Retriever(store, embedder)
     blog_agent = BlogAgent(
         provider, retriever, prompt_version=settings.blog_prompt_version, institution_context=settings.institution_context,
@@ -52,14 +61,37 @@ async def lifespan(app: FastAPI):
     app.state.runner = runner
     app.state.embedder = embedder
     app.state.content = content
+    app.state.images = images
     app.state.retriever = retriever
     app.state.blog_agent = blog_agent
-    log.info("provider=%s model=%s embedder=%s/%s store=%s jobs_loaded=%d data_dir=%s", provider.name, provider.model, embedder.name, embedder.model, store.kind, loaded, settings.data_dir)
+    app.state.watcher = _build_watcher(app, settings)
+    app.state.watcher.start()
+    log.info("provider=%s model=%s embedder=%s/%s store=%s jobs_loaded=%d data_dir=%s watcher=%s auto_draft=%s", provider.name, provider.model,
+             embedder.name, embedder.model, store.kind, loaded, settings.data_dir, "on" if settings.watcher_enabled else "off", settings.auto_draft)
     try:
         yield
     finally:
+        app.state.watcher.stop()
         runner.shutdown()
         store.close()
+
+
+def _build_watcher(app: FastAPI, settings) -> FolderWatcher:
+    """The folder watcher submits through the same path as /analyze and sweeps embeddings between scans."""
+    state = app.state
+
+    def submit(path: Path) -> tuple[str, bool]:
+        src = sources.from_path(str(path), settings.allowed_roots, settings.stable_seconds)
+        sub = submit_source(state, src, actor="watcher")
+        return sub.job.id, sub.deduplicated
+
+    def active_jobs() -> int:
+        return sum(1 for j in state.store.list() if j.is_active)
+
+    sweep = (lambda: embed_job_blocks(state.store, state.embedder, None)) if getattr(state.store, "supports_vectors", False) else None
+    return FolderWatcher(settings.watch_roots_resolved, submit=submit, active_jobs=active_jobs, sweep_embeddings=sweep,
+                         interval_seconds=settings.watcher_interval_seconds, stable_seconds=settings.watcher_stable_seconds,
+                         max_active_jobs=settings.watcher_max_active_jobs, state_file=settings.watcher_state_file, enabled=settings.watcher_enabled)
 
 
 def _build_store(settings):
@@ -82,21 +114,29 @@ def _build_store(settings):
 def create_app() -> FastAPI:
     app = FastAPI(title="CIMAGE AI Media Platform", version=get_settings().app_version, lifespan=lifespan)
     app.include_router(router)
+    app.include_router(composer_router)  # Video Composer (COMPOSER_ENABLED gates it)
     app.include_router(content_router)
+    app.include_router(admin_router)
 
     @app.get("/health", include_in_schema=False)
     def health() -> dict:
         return {"status": "ok"}
 
+    # One UI: everything lives in /admin (web/admin.html + web/admin/*.js modules). The old stand-alone pages redirect
+    # into their sections so bookmarks keep working; the files themselves are kept under web/_legacy and are not served.
+    @app.get("/admin", include_in_schema=False)
+    def admin_page() -> FileResponse:
+        return FileResponse(WEB_DIR / "admin.html")
+
     @app.get("/", include_in_schema=False)
-    def index() -> FileResponse:
-        return FileResponse(WEB_DIR / "index.html")
+    def index() -> RedirectResponse:
+        return RedirectResponse("/admin#overview", status_code=302)
 
     @app.get("/content", include_in_schema=False)
-    def content_page() -> FileResponse:
-        return FileResponse(WEB_DIR / "content.html")
+    def content_page() -> RedirectResponse:
+        return RedirectResponse("/admin#drafts", status_code=302)
 
-    app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+    app.mount("/static", StaticFiles(directory=WEB_DIR / "admin"), name="static")
     return app
 
 

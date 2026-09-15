@@ -52,6 +52,9 @@ class Draft(BaseModel):
     citations: list[dict[str, Any]] = Field(default_factory=list)
     evidence: dict[str, Any] = Field(default_factory=dict)
     hero_block_id: str | None = None
+    images: list[dict[str, Any]] = Field(default_factory=list)      # [{image_id, placement, caption, alt_text}]
+    hero_image_id: str | None = None
+    depth: str = "standard"
     model: str | None = None
     prompt_version: str | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
@@ -63,9 +66,14 @@ class Draft(BaseModel):
 
     @property
     def body_markdown_clean(self) -> str:
-        from agents.blog_agent.agent import strip_citation_markers
+        """Publishable Markdown: citation markers stripped, image markers rendered as figures."""
+        from agents.blog_agent.agent import render_image_markers, strip_citation_markers
 
-        return strip_citation_markers(self.body_markdown or "")
+        return render_image_markers(strip_citation_markers(self.body_markdown or ""), self.images)
+
+    @property
+    def hero(self) -> dict[str, Any] | None:
+        return next((im for im in self.images if im.get("placement") == "hero"), None)
 
 
 _OPP_COLS = "o.*, m.name AS source_name"
@@ -130,20 +138,24 @@ class ContentStore:
         return self.get_opportunity(oid)
 
     # ------------------------------------------------------------ drafts
-    def create_draft(self, brief: str, opportunity_id: str | None, kind: str = "blog") -> Draft:
+    def create_draft(self, brief: str, opportunity_id: str | None, kind: str = "blog", depth: str = "standard") -> Draft:
         did = _id()
         with self.pool.connection() as conn, conn.transaction():
-            conn.execute("INSERT INTO drafts (id, opportunity_id, kind, status, brief) VALUES (%s, %s, %s, 'generating', %s)", (did, opportunity_id, kind, brief))
+            conn.execute("INSERT INTO drafts (id, opportunity_id, kind, status, brief, depth) VALUES (%s, %s, %s, 'generating', %s, %s)", (did, opportunity_id, kind, brief, depth))
         return self.get_draft(did)
 
     def finish_draft(self, did: str, *, title: str, slug: str, body_markdown: str, seo: dict, social: dict, citations: list, evidence: dict,
-                     hero_block_id: str | None, model: str, prompt_version: str, usage: dict, warnings: list[str]) -> Draft:
+                     hero_block_id: str | None, model: str, prompt_version: str, usage: dict, warnings: list[str],
+                     images: list | None = None, depth: str | None = None) -> Draft:
+        images = images or []
+        hero = next((im.get("image_id") for im in images if im.get("placement") == "hero"), None)
         with self.pool.connection() as conn, conn.transaction():
             conn.execute(
                 """UPDATE drafts SET status = 'new', title = %s, slug = %s, body_markdown = %s, seo = %s, social = %s, citations = %s,
-                          evidence = %s, hero_block_id = %s, model = %s, prompt_version = %s, usage = %s, warnings = %s, error = NULL, updated_at = %s
+                          evidence = %s, hero_block_id = %s, images = %s, hero_image_id = %s, depth = COALESCE(%s, depth), model = %s, prompt_version = %s,
+                          usage = %s, warnings = %s, error = NULL, updated_at = %s
                    WHERE id = %s""",
-                (title, slug, body_markdown, Jsonb(seo), Jsonb(social), Jsonb(citations), Jsonb(evidence), hero_block_id, model,
+                (title, slug, body_markdown, Jsonb(seo), Jsonb(social), Jsonb(citations), Jsonb(evidence), hero_block_id, Jsonb(images), hero, depth, model,
                  prompt_version, Jsonb(usage), Jsonb(warnings), _now(), did),
             )
             conn.execute(
@@ -160,9 +172,28 @@ class ContentStore:
             conn.execute("UPDATE drafts SET status = 'failed', error = %s, updated_at = %s WHERE id = %s", (error, _now(), did))
         return self.get_draft(did)
 
-    def reset_draft_for_regeneration(self, did: str) -> Draft:
+    def reset_draft_for_regeneration(self, did: str, depth: str | None = None) -> Draft:
         with self.pool.connection() as conn, conn.transaction():
-            conn.execute("UPDATE drafts SET status = 'generating', version = version + 1, error = NULL, updated_at = %s WHERE id = %s", (_now(), did))
+            conn.execute("UPDATE drafts SET status = 'generating', version = version + 1, error = NULL, depth = COALESCE(%s, depth), updated_at = %s WHERE id = %s", (depth, _now(), did))
+        return self.get_draft(did)
+
+    def update_draft_images(self, did: str, images: list[dict[str, Any]], body_markdown: str | None = None) -> Draft:
+        """Editor placed / removed pictures (optionally with the body's [img=...] markers moved). Versioned like a text edit."""
+        hero = next((im.get("image_id") for im in images if im.get("placement") == "hero"), None)
+        with self.pool.connection() as conn, conn.transaction():
+            conn.execute(
+                "INSERT INTO draft_versions (draft_id, version, title, body_markdown, edited_by) SELECT id, version, title, body_markdown, 'previous' FROM drafts WHERE id = %s",
+                (did,),
+            )
+            conn.execute(
+                """UPDATE drafts SET images = %s, hero_image_id = %s, body_markdown = COALESCE(%s, body_markdown), version = version + 1,
+                          status = CASE WHEN status IN ('new', 'in_review') THEN 'in_review' ELSE status END, updated_at = %s WHERE id = %s""",
+                (Jsonb(images), hero, body_markdown, _now(), did),
+            )
+            conn.execute(
+                "INSERT INTO draft_versions (draft_id, version, title, body_markdown, edited_by) SELECT id, version, title, body_markdown, 'editor:images' FROM drafts WHERE id = %s",
+                (did,),
+            )
         return self.get_draft(did)
 
     def update_draft_text(self, did: str, *, title: str | None, body_markdown: str | None, edited_by: str = "editor") -> Draft:
@@ -195,7 +226,7 @@ class ContentStore:
 
     def list_drafts(self, status: str | None = None, limit: int = 200) -> list[Draft]:
         with self.pool.connection() as conn:
-            sql = "SELECT id, opportunity_id, kind, status, brief, title, slug, hero_block_id, model, prompt_version, usage, warnings, error, version, created_at, updated_at, '' AS body_markdown, '{}'::jsonb AS seo, '{}'::jsonb AS social, '[]'::jsonb AS citations, '{}'::jsonb AS evidence FROM drafts"
+            sql = "SELECT id, opportunity_id, kind, status, brief, title, slug, hero_block_id, hero_image_id, depth, model, prompt_version, usage, warnings, error, version, created_at, updated_at, '' AS body_markdown, '{}'::jsonb AS seo, '{}'::jsonb AS social, '[]'::jsonb AS citations, '{}'::jsonb AS evidence, '[]'::jsonb AS images FROM drafts"
             params: list[Any] = []
             if status:
                 sql += " WHERE status = %s"; params.append(status)

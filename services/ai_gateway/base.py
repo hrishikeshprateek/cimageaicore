@@ -71,3 +71,10 @@ class AIProvider(Protocol):
     def generate_structured(
         self, system_instruction: str, prompt: str, json_schema: dict[str, Any], *, model: str | None = None, thinking_level: str | None = None
     ) -> RawModelOutput: ...
+
+    def describe_images(
+        self, system_instruction: str, prompt: str, images: list[tuple[bytes, str]], json_schema: dict[str, Any], *,
+        model: str | None = None, thinking_level: str | None = None,
+    ) -> RawModelOutput:
+        """Structured call over one or more inline images [(bytes, mime_type)] - e.g. describing stills from a video."""
+        ...

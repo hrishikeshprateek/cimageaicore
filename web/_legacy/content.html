@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CIMAGE Content Center</title>
+<style>
+  :root{--bg:#f6f7f9;--card:#fff;--ink:#1a1d23;--muted:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;--accent-soft:#dbeafe;--ok:#15803d;--ok-soft:#dcfce7;--bad:#b91c1c;--bad-soft:#fee2e2;--warn:#b45309;--warn-soft:#fef3c7;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--ink:#e6e8ee;--muted:#9aa3b2;--line:#2a2f3a;--accent:#60a5fa;--accent-soft:#1e2a44;--ok:#4ade80;--ok-soft:#14301f;--bad:#f87171;--bad-soft:#3b1a1a;--warn:#fbbf24;--warn-soft:#3a2a0e}}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--line);background:var(--card)}
+  header h1{font-size:17px;margin:0;font-weight:650}header h1 span{color:var(--muted);font-weight:400;margin-left:8px;font-size:13px}header a{color:var(--accent);text-decoration:none;font-size:13px}
+  main{display:grid;grid-template-columns:400px 1fr;gap:20px;padding:20px 24px;max-width:1600px;margin:0 auto}@media(max-width:1000px){main{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:20px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 12px;display:flex;justify-content:space-between;align-items:center}
+  .filters{display:flex;gap:4px}.filters span{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--line);cursor:pointer;text-transform:none;letter-spacing:0}.filters span.on{background:var(--accent-soft);color:var(--accent)}
+  .opp,.dr{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}.dr{cursor:pointer}.dr:hover,.dr.sel{border-color:var(--accent);background:var(--accent-soft)}
+  .opp h4,.dr h4{margin:0 0 4px;font-size:14px}.m{color:var(--muted);font-size:12px}
+  .chip{font:11px var(--mono);padding:2px 7px;border-radius:6px;background:var(--line);white-space:nowrap;margin-right:4px}
+  .chip.new{background:var(--accent-soft);color:var(--accent)}.chip.accepted,.chip.approved,.chip.drafted{background:var(--ok-soft);color:var(--ok)}.chip.dismissed,.chip.rejected,.chip.failed{background:var(--bad-soft);color:var(--bad)}.chip.generating,.chip.in_review{background:var(--warn-soft);color:var(--warn);animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.5}}
+  .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}button{padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:12px;cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}button.ok{border-color:var(--ok);color:var(--ok)}button.bad{border-color:var(--bad);color:var(--bad)}button:disabled{opacity:.5;cursor:default}
+  input[type=text],textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink);font-size:13px;margin-bottom:8px;font-family:inherit}textarea{min-height:60vh;font:13px/1.5 var(--mono)}
+  .empty{color:var(--muted);text-align:center;padding:30px 0}
+  .tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--line);margin:14px 0 12px}.tab{padding:6px 10px;border-radius:8px 8px 0 0;cursor:pointer;color:var(--muted);font-size:13px}.tab.on{color:var(--accent);border-bottom:2px solid var(--accent)}
+  .article{max-width:780px;font-size:15px;line-height:1.7}.article h2{font-size:20px;margin:26px 0 8px;text-transform:none;letter-spacing:0;color:var(--ink);display:block}.article h3{font-size:16px}.article ul{padding-left:22px}.article blockquote{border-left:3px solid var(--accent);margin:0;padding:2px 12px;color:var(--muted)}
+  sup.cite{font:10px var(--mono);color:var(--accent);cursor:pointer;margin-left:2px}sup.cite:hover{text-decoration:underline}
+  .ev{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:13px}.ev.cited{border-color:var(--accent)}.ev.hl{background:var(--accent-soft)}.ev .ty{font:11px var(--mono);color:var(--accent)}.ev .src{color:var(--muted);font-size:11px}
+  .warn{background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:8px 12px;font-size:12px;margin-top:10px}.err{background:var(--bad-soft);color:var(--bad);border-radius:8px;padding:8px 12px;font-size:12px;margin-top:10px;font-family:var(--mono)}
+  .stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--muted)}.stats b{color:var(--ink);font-family:var(--mono);font-weight:500}
+  .social{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;white-space:pre-wrap}.social h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;color:var(--muted)}
+  .msg{font-size:12px;color:var(--muted);min-height:16px}.msg.err{color:var(--bad)}
+  .article figure{margin:18px 0}.article figure img{width:100%;border-radius:10px;display:block}.article figcaption{font-size:13px;color:var(--muted);margin-top:6px;font-style:italic}
+  .article figure.hero{margin:0 0 20px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.row .fix{flex:0 0 auto}select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink);font-size:13px;margin-bottom:8px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+  .pic{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg);font-size:12px;display:flex;flex-direction:column}.pic.used{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}.pic.hero{border-color:var(--ok);box-shadow:0 0 0 2px var(--ok-soft)}
+  .pic img{width:100%;aspect-ratio:16/10;object-fit:cover;display:block;background:#000}.pic .b{padding:8px;flex:1}.pic .d{color:var(--ink);line-height:1.35;max-height:52px;overflow:hidden}.pic .k{color:var(--muted);font:11px var(--mono)}.pic .btns{padding:0 8px 8px;margin-top:4px}
+  .pic input[type=text]{margin:6px 0 0;padding:6px 8px;font-size:12px}
+  .placement{display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:start;border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px}.placement img{width:120px;border-radius:6px;display:block}.placement input{margin-bottom:6px}
+  .field{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 4px;font-weight:600}
+</style>
+</head>
+<body>
+<header><h1>CIMAGE Content Center <span>opportunities → drafts → review</span></h1><span><a href="/admin" style="margin-right:14px;font-weight:600">Admin →</a><a href="/">← Video Intelligence</a></span></header>
+<main>
+  <section>
+    <div class="card">
+      <h2>Write from a brief</h2>
+      <input type="text" id="brief" placeholder="e.g. Article about our robotics lab for prospective parents">
+      <div class="row"><select id="briefJob"><option value="">anchor video: none (search the whole library)</option></select></div>
+      <div class="row"><select id="briefDepth"><option value="in_depth">in-depth feature (~1500 words, takeaways + FAQ)</option><option value="standard">standard article (~1000 words)</option></select>
+        <label class="fix" style="font-size:12px;color:var(--muted)"><input type="checkbox" id="briefImages" checked> pictures</label></div>
+      <div class="btns"><button class="primary" id="briefGo">Draft article</button></div>
+      <div class="msg" id="briefMsg">Pictures come only from the video's own frames and the local photo library - never the internet.</div>
+    </div>
+    <div class="card">
+      <h2>Content opportunities <span class="filters" id="oppFilters"><span data-s="new" class="on">new</span><span data-s="accepted">accepted</span><span data-s="drafted">drafted</span><span data-s="dismissed">dismissed</span></span></h2>
+      <div id="opps"></div>
+    </div>
+  </section>
+  <section>
+    <div class="card">
+      <h2>Drafts <span class="filters" id="drFilters"><span data-s="" class="on">all</span><span data-s="new">new</span><span data-s="in_review">in review</span><span data-s="approved">approved</span></span></h2>
+      <div id="drafts"></div>
+    </div>
+    <div class="card" id="view"><div class="empty">Select a draft.</div></div>
+  </section>
+</main>
+<script>
+const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api=(p,opt)=>fetch('/api/v1'+p,opt).then(r=>r.ok?r.json():r.json().then(e=>{throw new Error(e.detail||r.statusText)}));
+const post=(p,body)=>api(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body||{})});
+let oppStatus='new',drStatus='',SEL=null,DRAFT=null,TAB='article',HL=null,JOBS=[],CANDS=[],LIB=[],PLACE=[];
+async function loadJobs(){try{JOBS=(await api('/jobs')).filter(j=>j.block_counts&&Object.keys(j.block_counts).length)}catch(e){JOBS=[]}
+ const sel=$('#briefJob');const cur=sel.value;sel.innerHTML='<option value="">anchor video: none (search the whole library)</option>'+JOBS.map(j=>`<option value="${j.id}">${esc(j.source.name.slice(0,60))} · ${j.source.path?'local':'online'}</option>`).join('');sel.value=cur;}
+
+async function loadOpps(){const opps=await api('/opportunities'+(oppStatus?'?status='+oppStatus:''));const el=$('#opps');
+ if(!opps.length){el.innerHTML='<div class="empty">none</div>';return}
+ el.innerHTML=opps.map(o=>`<div class="opp"><h4>${esc(o.title)}</h4><div class="m">${o.confidence!=null?'conf '+(o.confidence*100).toFixed(0)+'% · ':''}${esc(o.audience||'')}<br>${(o.suggested_formats||[]).map(f=>'<span class="chip">'+esc(f)+'</span>').join('')}</div>${o.reason?'<div class="m" style="margin-top:4px">'+esc(o.reason)+'</div>':''}<div class="m" style="margin-top:4px">from ${esc(o.source_name||'—')} · ${o.source}</div>
+  <div class="btns">${o.status==='new'?`<button class="ok" data-a="accept" data-id="${o.id}">Accept</button><button class="bad" data-a="dismiss" data-id="${o.id}">Dismiss</button>`:''}${o.status!=='dismissed'?`<button class="primary" data-a="draft" data-id="${o.id}">Draft article</button>`:''}${o.status==='dismissed'?`<button data-a="accept" data-id="${o.id}">Restore</button>`:''}</div></div>`).join('');
+ el.querySelectorAll('button').forEach(b=>b.onclick=()=>oppAction(b.dataset.a,b.dataset.id));}
+async function oppAction(a,id){try{if(a==='accept')await post('/opportunities/'+id+'/status',{status:'accepted'});else if(a==='dismiss')await post('/opportunities/'+id+'/status',{status:'dismissed'});else if(a==='draft'){const d=await post('/drafts',{opportunity_id:id,depth:$('#briefDepth').value,include_images:$('#briefImages').checked});SEL=d.id;}await loadOpps();await loadDrafts();}catch(e){alert(e.message)}}
+$('#oppFilters').querySelectorAll('span').forEach(s=>s.onclick=()=>{oppStatus=s.dataset.s;$('#oppFilters').querySelectorAll('span').forEach(x=>x.classList.toggle('on',x===s));loadOpps()});
+$('#drFilters').querySelectorAll('span').forEach(s=>s.onclick=()=>{drStatus=s.dataset.s;$('#drFilters').querySelectorAll('span').forEach(x=>x.classList.toggle('on',x===s));loadDrafts()});
+$('#briefGo').onclick=async()=>{const b=$('#brief').value.trim();if(b.length<5)return msg('#briefMsg','Write a short brief first.',1);try{$('#briefGo').disabled=true;const d=await post('/drafts',{brief:b,job_id:$('#briefJob').value||null,depth:$('#briefDepth').value,include_images:$('#briefImages').checked});SEL=d.id;$('#brief').value='';msg('#briefMsg','Draft '+d.id+' generating…');await loadDrafts();}catch(e){msg('#briefMsg',e.message,1)}finally{$('#briefGo').disabled=false}};
+function msg(sel,t,err){const m=$(sel);m.textContent=t;m.className='msg'+(err?' err':'')}
+
+async function loadDrafts(){const ds=await api('/drafts'+(drStatus?'?status='+drStatus:''));const el=$('#drafts');
+ el.innerHTML=ds.length?ds.map(d=>`<div class="dr ${d.id===SEL?'sel':''}" data-id="${d.id}"><h4>${esc(d.title||d.brief)}</h4><div class="m"><span class="chip ${d.status}">${d.status}</span> v${d.version} · ${esc(d.model||'')} · ${new Date(d.created_at).toLocaleString()}${d.warnings&&d.warnings.length?' · ⚠ '+d.warnings.length:''}</div></div>`).join(''):'<div class="empty">no drafts yet</div>';
+ el.querySelectorAll('.dr').forEach(n=>n.onclick=()=>{SEL=n.dataset.id;TAB='article';history.replaceState(null,'','#draft='+SEL);loadDrafts();});
+ if(SEL){DRAFT=await api('/drafts/'+SEL);if(TAB==='images'&&!CANDS.length&&!LIB.length)await loadImagesFor(DRAFT);renderDraft();}
+ if(ds.some(d=>d.status==='generating'))setTimeout(loadDrafts,3000);}
+
+function figure(id,cls){const im=(DRAFT&&DRAFT.images||[]).find(x=>x.image_id===id);if(!im)return '';return `<figure class="${cls||''}"><img src="/api/v1/images/${esc(id)}" alt="${esc(im.alt_text||'')}" loading="lazy">${im.caption?'<figcaption>'+esc(im.caption)+'</figcaption>':''}</figure>`}
+function md(src){const lines=src.split('\n');let h='',inList=false;const inline=t=>esc(t).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\*(.+?)\*/g,'<i>$1</i>').replace(/\[id=([^\]]+)\]/g,(m,ids)=>ids.split(',').map(x=>x.trim().replace(/^id=/,'')).map(x=>`<sup class="cite" data-id="${esc(x)}" title="${esc(x)}">${x.split(':').slice(1).join(':')}</sup>`).join(''));
+ for(const raw of lines){const l=raw.trimEnd();if(/^\s*[\*\-] /.test(l)){if(!inList){h+='<ul>';inList=true}h+='<li>'+inline(l.replace(/^\s*[\*\-] /,''))+'</li>';continue}if(inList){h+='</ul>';inList=false}
+  const im=l.match(/^\s*\[img=([^\]]+)\]\s*$/);if(im){h+=figure(im[1].trim());continue}
+  if(/^### /.test(l))h+='<h3>'+inline(l.slice(4))+'</h3>';else if(/^## /.test(l))h+='<h2>'+inline(l.slice(3))+'</h2>';else if(/^# /.test(l))h+='<h2>'+inline(l.slice(2))+'</h2>';else if(/^> /.test(l))h+='<blockquote>'+inline(l.slice(2))+'</blockquote>';else if(l.trim())h+='<p>'+inline(l)+'</p>';}
+ if(inList)h+='</ul>';return h;}
+
+function renderDraft(){const d=DRAFT;const v=$('#view');if(!d){v.innerHTML='<div class="empty">Select a draft.</div>';return}
+ const cited=new Set((d.citations||[]).map(c=>c.block_id));const ev=(d.evidence&&d.evidence.blocks)||[];
+ let h=`<h2 style="text-transform:none;letter-spacing:0;font-size:18px;color:var(--ink)">${esc(d.title||d.brief)} <span class="chip ${d.status}">${d.status}</span></h2>
+ <div class="stats"><span>v<b>${d.version}</b></span><span>model <b>${esc(d.model||'—')}</b></span><span>prompt <b>${esc(d.prompt_version||'—')}</b></span><span>tokens <b>${d.usage&&d.usage.total_tokens!=null?d.usage.total_tokens:'—'}</b></span><span>citations <b>${(d.citations||[]).length}</b></span><span>evidence blocks <b>${ev.length}</b></span><span>depth <b>${esc(d.depth||'standard')}</b></span><span>words <b>${(d.body_markdown||'').split(/\s+/).filter(Boolean).length}</b></span><span>pictures <b>${(d.images||[]).length}</b></span></div>`;
+ if(d.error)h+=`<div class="err">${esc(d.error)}</div>`;if(d.warnings&&d.warnings.length)h+=`<div class="warn">⚠ ${d.warnings.map(esc).join(' · ')}</div>`;
+ if(d.status==='generating'){h+='<div class="empty">Generating…</div>';v.innerHTML=h;return}
+ const busy=d.status==='generating'||d.status==='failed';
+ h+=`<div class="btns">${!busy&&d.status!=='approved'?'<button class="ok" data-a="approved">Approve</button>':''}${!busy&&d.status!=='in_review'?'<button data-a="in_review">Mark in review</button>':''}${!busy&&d.status!=='rejected'?'<button class="bad" data-a="rejected">Reject</button>':''}<button data-a="regen">Regenerate</button><button data-a="regen_deep" title="rewrite as an in-depth feature with pictures">Regenerate in-depth</button></div>`;
+ const tabs=[['article','Article'],['images','Images'],['evidence','Evidence'],['social','Social'],['seo','SEO'],['edit','Edit'],['raw','Raw']];
+ h+='<div class="tabs">'+tabs.map(([k,l])=>`<span class="tab ${TAB===k?'on':''}" data-t="${k}">${l}</span>`).join('')+'</div>';
+ if(TAB==='article'){const hero=(d.images||[]).find(x=>x.placement==='hero');h+=`<div class="article" id="article">${hero?figure(hero.image_id,'hero'):''}${md(d.body_markdown||'')}</div><p class="m">Superscripts are evidence ids; click one to see the block. They are stripped when publishing. Pictures are frames of the analysed video or library photos - manage them in the Images tab.</p>`;}
+ if(TAB==='images')h+=renderImagesTab(d);
+ if(TAB==='evidence')h+=`<p class="m">${ev.length} blocks from ${(d.evidence.sources||[]).map(s=>esc(s.source_name)+' ('+s.blocks+')').join(', ')}. Blue border = cited.</p>`+ev.map(b=>`<div class="ev ${cited.has(b.block_id)?'cited':''} ${HL===b.block_id?'hl':''}" id="ev-${esc(b.block_id)}"><span class="ty">${esc(b.block_type)}</span> ${b.timestamp?'<span class="chip">'+esc(b.timestamp)+'</span>':''} ${esc(b.text)}<div class="src">${esc(b.source_name)} · ${esc(b.block_id)}</div></div>`).join('');
+ if(TAB==='social')h+=Object.entries(d.social||{}).map(([k,t])=>`<div class="social"><h4>${esc(k)}</h4>${esc(t)}</div>`).join('')||'<div class="empty">none</div>';
+ if(TAB==='seo'){const s=d.seo||{};h+=`<div class="ev"><b>SEO title</b><br>${esc(s.seo_title||'')}</div><div class="ev"><b>Meta description</b> (${(s.meta_description||'').length} chars)<br>${esc(s.meta_description||'')}</div><div class="ev"><b>Excerpt</b><br>${esc(s.excerpt||'')}</div><div class="ev"><b>Slug</b><br><code>${esc(d.slug||'')}</code></div><div class="ev"><b>Tags</b><br>${(s.tags||[]).map(t=>'<span class="chip">'+esc(t)+'</span>').join(' ')}</div><div class="ev"><b>Hero image block</b><br>${esc(d.hero_block_id||'none')}</div><div class="ev"><b>Evidence gaps (left out on purpose)</b><ul>${(s.evidence_gaps||[]).map(g=>'<li>'+esc(g)+'</li>').join('')}</ul></div>`;}
+ if(TAB==='edit')h+=`<input type="text" id="eTitle" value="${esc(d.title||'')}"><textarea id="eBody">${esc(d.body_markdown||'')}</textarea><div class="btns"><button class="primary" id="eSave">Save as new version</button></div><div class="msg" id="eMsg"></div>`;
+ if(TAB==='raw')h+=`<pre style="font:12px var(--mono);white-space:pre-wrap">${esc(JSON.stringify(d,null,2))}</pre>`;
+ v.innerHTML=h;
+ v.querySelectorAll('.tab').forEach(t=>t.onclick=async()=>{TAB=t.dataset.t;if(TAB==='images')await loadImagesFor(d);renderDraft()});
+ if(TAB==='images')bindImagesTab(v,d);
+ v.querySelectorAll('button[data-a]').forEach(b=>b.onclick=()=>draftAction(b.dataset.a));
+ v.querySelectorAll('sup.cite').forEach(s=>s.onclick=()=>{HL=s.dataset.id;TAB='evidence';renderDraft();const e=document.getElementById('ev-'+HL);if(e)e.scrollIntoView({block:'center'});});
+ const save=$('#eSave');if(save)save.onclick=async()=>{try{save.disabled=true;await fetch('/api/v1/drafts/'+d.id,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({title:$('#eTitle').value,body_markdown:$('#eBody').value})}).then(r=>{if(!r.ok)throw new Error('save failed')});msg('#eMsg','Saved.');TAB='article';await loadDrafts();}catch(e){msg('#eMsg',e.message,1)}finally{save.disabled=false}};}
+async function draftAction(a){try{if(a==='regen')await post('/drafts/'+DRAFT.id+'/regenerate');else if(a==='regen_deep')await post('/drafts/'+DRAFT.id+'/regenerate?depth=in_depth');else await post('/drafts/'+DRAFT.id+'/status',{status:a});await loadDrafts();await loadOpps();}catch(e){alert(e.message)}}
+
+// ---------------------------------------------------------------- images tab
+function renderImagesTab(d){PLACE=(d.images||[]).map(x=>({...x}));const jobId=d.evidence&&d.evidence.job_id;const offered=new Set((d.evidence&&d.evidence.offered_images)||[]);
+ const cand=CANDS.map(c=>{const used=PLACE.find(p=>p.image_id===c.id);return `<div class="pic ${used?(used.placement==='hero'?'hero':'used'):''}"><img src="${c.url}" loading="lazy" title="${esc(c.description)}"><div class="b"><div class="d">${esc(c.description||'(no description)')}</div><div class="k">${c.kind==='frame'?(c.timestamp?'frame '+esc(c.timestamp):'thumbnail'):'library'}${(c.tags||[]).includes('ai')?' · ✓ AI-verified':(c.tags||[]).includes('blocks')?' · unverified':''}${offered.has(c.id)?' · offered':''}${(c.suitable_for||[]).length?' · '+c.suitable_for.join(', '):''}</div></div><div class="btns">${used?`<button data-rm="${c.id}">Remove</button>`:`<button data-hero="${c.id}">Hero</button><button data-ins="${c.id}">Insert</button>`}</div></div>`}).join('');
+ const lib=LIB.map(c=>{const used=PLACE.find(p=>p.image_id===c.id);return `<div class="pic ${used?(used.placement==='hero'?'hero':'used'):''}"><img src="${c.url}" loading="lazy"><div class="b"><div class="d">${esc(c.description||'(no description)')}</div><div class="k">${(c.tags||[]).map(esc).join(', ')}</div></div><div class="btns">${used?`<button data-rm="${c.id}">Remove</button>`:`<button data-hero="${c.id}">Hero</button><button data-ins="${c.id}">Insert</button>`}</div></div>`}).join('');
+ const pl=PLACE.map((p,i)=>`<div class="placement" data-i="${i}"><img src="/api/v1/images/${esc(p.image_id)}"><div><div class="k m">${p.placement==='hero'?'HERO (featured image)':'inline · appears where its [img=…] line is in the article'}</div><input type="text" data-k="caption" value="${esc(p.caption||'')}" placeholder="caption"><input type="text" data-k="alt_text" value="${esc(p.alt_text||'')}" placeholder="alt text"></div><div class="btns" style="margin:0;flex-direction:column">${p.placement!=='hero'?`<button data-mkhero="${i}">Make hero</button>`:''}<button class="bad" data-rmi="${i}">Remove</button></div></div>`).join('');
+ return `<div class="field">In this article (${PLACE.length})</div>${pl||'<div class="m">No pictures yet - pick from the candidates below.</div>'}
+  <div class="btns"><button class="primary" id="imgSave">Save pictures as new version</button><span class="msg" id="imgMsg"></span></div>
+  <div class="field" style="margin-top:18px">Stills from the analysed video ${jobId?'· '+esc(jobId):''} <span style="text-transform:none;letter-spacing:0;font-weight:400">${jobId?`<button data-frames="${jobId}" data-mode="ai" title="shot detection + Gemini describes what each still really shows; only usable stills are kept">🔍 index stills with AI</button> <button data-frames="${jobId}" data-mode="blocks" title="one quick frame per media / key-moment block at its (approximate) timestamp - no AI">quick frames</button>`:'(draft has no anchoring video)'}</span></div>
+  <div class="grid">${cand||'<div class="m">No frames yet. Extract them from the media / key-moment blocks of the video.</div>'}</div>
+  <div class="field" style="margin-top:18px">Local photo library (${LIB.length})</div>
+  <div class="grid">${lib||'<div class="m">Library is empty. Upload the media team\'s own photos below, or import a folder under NAS_ALLOWED_ROOTS.</div>'}</div>
+  <div class="row" style="margin-top:12px;align-items:flex-end"><div><div class="field">Add a photo</div><input type="file" id="libFile" accept=".jpg,.jpeg,.png,.webp"><input type="text" id="libDesc" placeholder="what the photo shows (used by the writer to pick it)"><input type="text" id="libTags" placeholder="tags, comma separated"></div><button class="fix" id="libUp">Upload</button></div>
+  <div class="row" style="align-items:flex-end"><div><div class="field">Import a folder</div><input type="text" id="libPath" placeholder="/path/under/NAS_ALLOWED_ROOTS (optional captions.txt: name<TAB>description)"></div><button class="fix" id="libImp">Import</button></div><div class="msg" id="libMsg"></div>`;}
+async function loadImagesFor(d){const jobId=d.evidence&&d.evidence.job_id;const offered=(d.evidence&&d.evidence.offered_images)||[];
+ try{const own=jobId?await api('/images?job_id='+jobId+'&kind=frame'):[];const extra=offered.length?await api('/images?ids='+offered.join(',')):[];const seen=new Set(own.map(x=>x.id));
+  CANDS=own.concat(extra.filter(x=>x.kind==='frame'&&!seen.has(x.id)));LIB=await api('/images?kind=library')}catch(e){CANDS=[];LIB=[]}}
+function bindImagesTab(v,d){
+ v.querySelectorAll('[data-hero]').forEach(b=>b.onclick=()=>{const c=[...CANDS,...LIB].find(x=>x.id===b.dataset.hero);PLACE=PLACE.filter(p=>p.placement!=='hero');PLACE.unshift({image_id:c.id,placement:'hero',caption:c.description||'',alt_text:c.description||''});DRAFT.images=PLACE;renderDraft()});
+ v.querySelectorAll('[data-ins]').forEach(b=>b.onclick=()=>{const c=[...CANDS,...LIB].find(x=>x.id===b.dataset.ins);PLACE.push({image_id:c.id,placement:'inline',caption:c.description||'',alt_text:c.description||''});DRAFT.images=PLACE;renderDraft()});
+ v.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{PLACE=PLACE.filter(p=>p.image_id!==b.dataset.rm);DRAFT.images=PLACE;renderDraft()});
+ v.querySelectorAll('[data-rmi]').forEach(b=>b.onclick=()=>{readPlacements(v);PLACE.splice(+b.dataset.rmi,1);DRAFT.images=PLACE;renderDraft()});
+ v.querySelectorAll('[data-mkhero]').forEach(b=>b.onclick=()=>{readPlacements(v);const i=+b.dataset.mkhero;PLACE.forEach(p=>{if(p.placement==='hero')p.placement='inline'});PLACE[i].placement='hero';PLACE.sort((a,b)=>(a.placement==='hero'?-1:0)-(b.placement==='hero'?-1:0));DRAFT.images=PLACE;renderDraft()});
+ v.querySelectorAll('[data-frames]').forEach(fr=>fr.onclick=async()=>{fr.disabled=true;const label=fr.textContent;fr.textContent=fr.dataset.mode==='ai'?'looking at the video…':'extracting…';try{const r=await post('/jobs/'+fr.dataset.frames+'/frames?mode='+fr.dataset.mode+'&force='+(fr.dataset.mode==='ai'?'true':'false'));await loadImagesFor(d);renderDraft();if(r.mode==='blocks'&&r.meta.fallback_reason)alert('AI indexing unavailable ('+r.meta.fallback_reason+'); timestamp-based frames were extracted instead.')}catch(e){alert(e.message);fr.disabled=false;fr.textContent=label}});
+ const save=$('#imgSave');if(save)save.onclick=async()=>{readPlacements(v);try{save.disabled=true;const r=await fetch('/api/v1/drafts/'+d.id+'/images',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({images:PLACE})});const j=await r.json();if(!r.ok)throw new Error(j.detail||'save failed');msg('#imgMsg','Saved as v'+j.version+'.');TAB='article';await loadDrafts()}catch(e){msg('#imgMsg',e.message,1)}finally{save.disabled=false}};
+ const up=$('#libUp');if(up)up.onclick=async()=>{const f=$('#libFile').files[0];if(!f)return msg('#libMsg','Choose a photo.',1);const fd=new FormData();fd.append('file',f);fd.append('description',$('#libDesc').value);fd.append('tags',$('#libTags').value);try{up.disabled=true;const r=await fetch('/api/v1/images/library',{method:'POST',body:fd});const j=await r.json();if(!r.ok)throw new Error(j.detail||'upload failed');await loadImagesFor(d);renderDraft();msg('#libMsg','Added '+j.source_name+'.')}catch(e){msg('#libMsg',e.message,1)}finally{up.disabled=false}};
+ const imp=$('#libImp');if(imp)imp.onclick=async()=>{const p=$('#libPath').value.trim();if(!p)return msg('#libMsg','Enter a folder path.',1);try{imp.disabled=true;const r=await post('/images/library/import',{path:p});await loadImagesFor(d);renderDraft();msg('#libMsg','Imported '+r.length+' photo(s).')}catch(e){msg('#libMsg',e.message,1)}finally{imp.disabled=false}};}
+function readPlacements(v){v.querySelectorAll('.placement').forEach(row=>{const i=+row.dataset.i;row.querySelectorAll('input').forEach(inp=>{PLACE[i][inp.dataset.k]=inp.value})})}
+const hm=location.hash.match(/draft=([a-f0-9]+)/);if(hm)SEL=hm[1];const ht=location.hash.match(/tab=(\w+)/);if(ht)TAB=ht[1];loadJobs();loadOpps();loadDrafts();setInterval(loadOpps,10000);
+</script>
+</body>
+</html>

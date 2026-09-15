@@ -33,6 +33,10 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.setenv("NAS_ALLOWED_ROOTS", str(nas))
     monkeypatch.setenv("STABLE_SECONDS", "0.2")
     monkeypatch.setenv("GEMINI_API_KEY", "")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")   # never the developer's .env choice (ollama/gemini) in tests
+    monkeypatch.setenv("EMBEDDING_MODEL", "auto")
+    monkeypatch.setenv("WATCHER_ENABLED", "false")      # tests drive the watcher explicitly
+    monkeypatch.setenv("AUTO_DRAFT", "false")
     monkeypatch.setenv("DATABASE_URL", "")
     from apps.api import config
 

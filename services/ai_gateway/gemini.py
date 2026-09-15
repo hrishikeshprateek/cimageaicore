@@ -169,6 +169,16 @@ class GeminiProvider:
         )
         return self._to_output(it)
 
+    def describe_images(self, system_instruction: str, prompt: str, images: list[tuple[bytes, str]], json_schema: dict[str, Any], *,
+                        model: str | None = None, thinking_level: str | None = None) -> RawModelOutput:
+        """Inline images (base64) + text -> structured JSON. Keeps each image under a few hundred KB; callers pre-size them."""
+        import base64
+
+        parts: list[dict[str, Any]] = [{"type": "image", "data": base64.b64encode(data).decode("ascii"), "mime_type": mime} for data, mime in images]
+        parts.append({"type": "text", "text": prompt})
+        it = self._create_with_retry(input=parts, system_instruction=system_instruction, json_schema=json_schema, model=model, thinking_level=thinking_level)
+        return self._to_output(it)
+
     def _create_with_retry(self, *, input: list[dict[str, Any]], system_instruction: str, json_schema: dict[str, Any], model: str | None = None, thinking_level: str | None = None):
         gen_cfg: dict[str, Any] = {"thinking_level": thinking_level or self.thinking_level}
         if self.max_output_tokens:

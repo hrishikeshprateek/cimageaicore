@@ -1,4 +1,5 @@
-"""Embed every knowledge block that has no vector yet:  python scripts/embed_backfill.py"""
+"""Embed every knowledge block that has no vector yet, or whose vector came from a different model than the one
+configured now (EMBEDDING_PROVIDER / EMBEDDING_MODEL):  python scripts/embed_backfill.py"""
 import sys
 from pathlib import Path
 
@@ -15,7 +16,7 @@ if not s.database_url:
 pool = make_pool(s.database_url)
 run_migrations(pool)
 store, embedder = PostgresJobStore(pool), build_embedder(s)
-print("before:", store.embedding_stats(), "| embedder:", embedder.name, embedder.model, embedder.dimensions)
+print("before:", store.embedding_stats(embedder.model), "| embedder:", embedder.name, embedder.model, embedder.dimensions)
 n = embed_job_blocks(store, embedder, None)
-print("embedded:", n, "| after:", store.embedding_stats())
+print("embedded:", n, "| after:", store.embedding_stats(embedder.model))
 store.close()
