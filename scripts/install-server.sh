@@ -25,34 +25,36 @@ die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 [ "$(uname -s)" = "Linux" ] || die "this installer is for Linux servers (on Windows use Docker Desktop + WSL2, see docs/DEPLOY.md)"
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 command -v sudo >/dev/null || [ -z "$SUDO" ] || die "sudo is required"
+ME="${USER:-$(id -un)}"
 
 # ---------------------------------------------------------------- 1. Docker
+say "Installing prerequisites (curl, git, openssl, cifs-utils)"
+$SUDO apt-get update -qq
+$SUDO apt-get install -y -qq ca-certificates curl git openssl cifs-utils >/dev/null
 if ! command -v docker >/dev/null 2>&1; then
   say "Installing Docker Engine"
-  $SUDO apt-get update -qq
-  $SUDO apt-get install -y -qq ca-certificates curl git cifs-utils >/dev/null
   curl -fsSL https://get.docker.com | $SUDO sh
 else
   say "Docker already installed: $(docker --version)"
-  command -v git >/dev/null || $SUDO apt-get install -y -qq git >/dev/null
 fi
 docker compose version >/dev/null 2>&1 || $SUDO docker compose version >/dev/null 2>&1 || die "docker compose plugin missing (apt-get install docker-compose-plugin)"
 $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
-if [ -n "$SUDO" ] && ! id -nG "$USER" | grep -qw docker; then
-  $SUDO usermod -aG docker "$USER" && say "added $USER to the docker group (takes effect at your next login)"
+if [ -n "$SUDO" ] && ! id -nG "$ME" | grep -qw docker; then
+  $SUDO usermod -aG docker "$ME" && say "added $ME to the docker group (takes effect at your next login)"
 fi
 DOCKER="$SUDO docker"
 
 # ---------------------------------------------------------------- 2. repo
+# the checkout is owned by the installing user (git refuses to touch repos owned by someone else)
 if [ -d "$INSTALL_DIR/.git" ]; then
   say "Updating $INSTALL_DIR"
-  $SUDO git -C "$INSTALL_DIR" fetch -q origin && $SUDO git -C "$INSTALL_DIR" checkout -q "$GIT_REF" && $SUDO git -C "$INSTALL_DIR" pull -q --ff-only origin "$GIT_REF"
+  $SUDO chown -R "$ME":"$ME" "$INSTALL_DIR"
+  git -C "$INSTALL_DIR" fetch -q origin && git -C "$INSTALL_DIR" checkout -q "$GIT_REF" && git -C "$INSTALL_DIR" pull -q --ff-only origin "$GIT_REF"
 else
   say "Cloning into $INSTALL_DIR"
-  $SUDO mkdir -p "$(dirname "$INSTALL_DIR")"
-  $SUDO git clone -q --branch "$GIT_REF" "$REPO_URL" "$INSTALL_DIR"
+  $SUDO mkdir -p "$INSTALL_DIR" && $SUDO chown "$ME":"$ME" "$INSTALL_DIR"
+  git clone -q --branch "$GIT_REF" "$REPO_URL" "$INSTALL_DIR"
 fi
-$SUDO chown -R "$USER":"$USER" "$INSTALL_DIR" 2>/dev/null || true
 cd "$INSTALL_DIR"
 mkdir -p data/composer/templates data/renders data/images data/nas-test/AI-Test
 
