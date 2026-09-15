@@ -33,7 +33,23 @@ Mount the college NAS read-only (one line in `/etc/fstab`; `nofail` so a NAS out
 `/etc/nas.cred` holds `username=` / `password=` of a **read-only** NAS account (`chmod 600`). Create the drop folder
 the watcher scans, e.g. `/mnt/nas/AI-Test` (the spec: watch `/AI-Test` only, not the whole NAS).
 
-## 2. App — pull from Docker Hub (no build on the server)
+## 2. One-shot install (recommended)
+
+On a fresh Ubuntu/Debian box, as a user with sudo:
+
+```bash
+GEMINI_API_KEY=... NAS_WATCH_DIR=/mnt/nas bash -c "$(curl -fsSL https://raw.githubusercontent.com/hrishikeshprateek/cimageaicore/main/scripts/install-server.sh)"
+```
+
+`scripts/install-server.sh` installs Docker if needed, clones the repo into `/opt/cimage-ai`, writes `.env` (Gemini key,
+NAS folder, `COMPOSER_ENABLED=true`, a generated `PUBLISH_SECRET_KEY`), installs a **systemd unit (`cimage-ai.service`)
+that runs `docker compose up -d` at every boot after the NAS mount**, disables sleep, and starts the stack. Re-running it is
+safe (it updates the checkout and keeps `.env`). Later updates: `bash /opt/cimage-ai/scripts/update-server.sh`.
+
+Useful afterwards: `systemctl status cimage-ai` · `docker compose -f /opt/cimage-ai/docker-compose.yml ps` ·
+`docker compose logs -f api` · `nano /opt/cimage-ai/.env && docker compose up -d`.
+
+## 2a. Manual — pull from Docker Hub (no build on the server)
 
 Every release is published as `hrishikeshprateek/cimage-ai-api:<version>` (and `:latest`). The compose file already
 points at the current release, so a server only needs the repo's config files, not a Python toolchain:
