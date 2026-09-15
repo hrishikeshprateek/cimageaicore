@@ -72,7 +72,7 @@ function mountEditor() {
     <button class="btn sm tonal" id="setin" title="key: I">⟵ IN here</button><button class="btn sm tonal" id="setout" title="key: O">OUT here ⟶</button><button class="btn sm outlined" id="loop" title="key: L">${icon('play', 's')}loop the cut</button></div>
   <div class="muted body-s" style="margin-top:6px">Drag the handles or press <kbd>I</kbd> / <kbd>O</kbd> at the playhead · <kbd>space</kbd> play/pause · <kbd>L</kbd> loop · <kbd>←</kbd>/<kbd>→</kbd> step 0.2 s</div>
   <div id="cutwarn"></div>
-  <div class="g2" style="margin-top:14px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+  <div class="g2 even" style="margin-top:14px">
     <div><div class="row between"><span class="overline">Proposed cuts</span><span id="refinebox"></span></div><div id="cuts" style="margin-top:8px"><div class="loading"><span class="spin"></span></div></div></div>
     <div><span class="overline">Fine trim (seconds)</span>
       <div class="row" style="margin-top:8px;flex-wrap:nowrap"><input type="number" id="cin" step="0.1" min="0" style="flex:1;width:auto;min-width:0"><span>→</span><input type="number" id="cout" step="0.1" min="0" style="flex:1;width:auto;min-width:0"></div>

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "CIMAGE AI Media Platform"
-    app_version: str = "0.9.1"
+    app_version: str = "0.9.2"
 
     ai_provider: Literal["auto", "gemini", "mock"] = "auto"
 

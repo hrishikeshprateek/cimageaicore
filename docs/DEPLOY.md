@@ -85,10 +85,10 @@ Publishing a release from the dev machine (maintainers):
 ```bash
 # multi-arch: the production box is x86-64 (AMD), the dev Mac is arm64 - a plain `docker build` on the Mac gives an arm64-only image
 docker buildx build --platform linux/amd64,linux/arm64 -f docker/api.Dockerfile \
-  -t hrishikeshprateek/cimage-ai-api:0.9.1 -t hrishikeshprateek/cimage-ai-api:latest --push .
-docker manifest inspect hrishikeshprateek/cimage-ai-api:0.9.1 | grep architecture     # expect amd64 + arm64
+  -t hrishikeshprateek/cimage-ai-api:0.9.2 -t hrishikeshprateek/cimage-ai-api:latest --push .
+docker manifest inspect hrishikeshprateek/cimage-ai-api:0.9.2 | grep architecture     # expect amd64 + arm64
 # offline copy (Docker Desktop's containerd store saves BOTH platforms into one tarball; `docker load` picks the server's):
-docker save hrishikeshprateek/cimage-ai-api:0.9.1 | gzip -1 > dist/cimage-ai-api-0.9.0.tar.gz     # ≈ 650 MB
+docker save hrishikeshprateek/cimage-ai-api:0.9.2 | gzip -1 > dist/cimage-ai-api-0.9.0.tar.gz     # ≈ 650 MB
 # note: dist/cimage-ai-api-0.8.0.tar.gz and the 0.8.0 tag on Docker Hub are arm64-only and will not run on the AMD server
 ```
 

@@ -3,7 +3,7 @@
 # The embedding model is pulled automatically (ollama-pull); open http://<host>:8000/admin once `docker compose ps` shows api healthy.
 services:
   api:
-    image: ${API_IMAGE:-hrishikeshprateek/cimage-ai-api:0.9.1}   # published on Docker Hub (linux/amd64 + arm64): `docker compose pull` needs no build
+    image: ${API_IMAGE:-hrishikeshprateek/cimage-ai-api:0.9.2}   # published on Docker Hub (linux/amd64 + arm64): `docker compose pull` needs no build
     build:
       context: .
       dockerfile: docker/api.Dockerfile

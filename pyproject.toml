@@ -1,6 +1,6 @@
 [project]
 name = "cimage-ai"
-version = "0.9.1"
+version = "0.9.2"
 description = "CIMAGE AI Media Platform - Video -> Knowledge Blocks engine (V0.1)"
 requires-python = ">=3.12"
 dependencies = [
