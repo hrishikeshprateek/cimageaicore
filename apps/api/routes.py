@@ -58,7 +58,8 @@ async def analyze(
         if file is not None:
             source = await _save_upload(file, s.uploads_dir, s.max_upload_mb)
         elif path:
-            source = sources.from_path(path, s.allowed_roots, s.stable_seconds)
+            allowed = s.allowed_roots + list(getattr(getattr(request.app.state, "watcher", None), "roots", []))   # + folders picked in the admin UI
+            source = sources.from_path(path, allowed, s.stable_seconds)
         else:
             source = sources.from_url(url or "")
     except sources.SourceError as exc:

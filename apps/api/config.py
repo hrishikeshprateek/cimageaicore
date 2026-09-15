@@ -115,6 +115,10 @@ class Settings(BaseSettings):
         return roots
 
     @property
+    def watcher_config_file(self) -> Path:
+        return self.data_dir / "watcher_config.json"
+
+    @property
     def watch_roots_resolved(self) -> list[Path]:
         raw = [x.strip() for x in self.watch_roots.split(",") if x.strip()]
         if not raw:

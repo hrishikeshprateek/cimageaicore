@@ -149,6 +149,15 @@ class FolderWatcher:
         """Scan now instead of waiting for the interval."""
         self._wake.set()
 
+    def set_roots(self, roots: list[Path]) -> None:
+        """Change the watched folders while running (the admin folder picker). Files under a removed root stay in the index."""
+        with self._lock:
+            self.roots = [Path(r) for r in roots]
+            self._status.roots = [str(r) for r in self.roots]
+            self._seen = {k: v for k, v in self._seen.items() if any(k.startswith(str(r)) for r in self.roots)}
+        self._event("roots_changed", detail=", ".join(str(r) for r in self.roots)[:300])
+        self._wake.set()
+
     def set_paused(self, paused: bool) -> None:
         self.paused = paused
         self._status.paused = paused

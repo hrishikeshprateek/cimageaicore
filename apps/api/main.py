@@ -14,6 +14,7 @@ from apps.api.composer_routes import router as composer_router
 from apps.api.config import REPO_ROOT, get_settings
 from apps.api.content_routes import auto_draft_job, router as content_router
 from apps.api.publish_routes import router as publish_router
+from apps.api.nas_routes import router as nas_router
 from apps.api.ingest import submit_source
 from apps.api.jobs import JobRunner, JsonJobStore, embed_job_blocks
 from apps.api.routes import router
@@ -85,7 +86,8 @@ def _build_watcher(app: FastAPI, settings) -> FolderWatcher:
     state = app.state
 
     def submit(path: Path) -> tuple[str, bool]:
-        src = sources.from_path(str(path), settings.allowed_roots, settings.stable_seconds)
+        allowed = settings.allowed_roots + list(getattr(getattr(state, "watcher", None), "roots", []))   # + folders picked in the UI
+        src = sources.from_path(str(path), allowed, settings.stable_seconds)
         sub = submit_source(state, src, actor="watcher")
         return sub.job.id, sub.deduplicated
 
@@ -93,7 +95,11 @@ def _build_watcher(app: FastAPI, settings) -> FolderWatcher:
         return sum(1 for j in state.store.list() if j.is_active)
 
     sweep = (lambda: embed_job_blocks(state.store, state.embedder, None)) if getattr(state.store, "supports_vectors", False) else None
-    return FolderWatcher(settings.watch_roots_resolved, submit=submit, active_jobs=active_jobs, sweep_embeddings=sweep,
+    from services.ingestion.config import load_config
+
+    ui_roots = [Path(r) for r in load_config(settings.watcher_config_file).roots]
+    roots = settings.watch_roots_resolved + [r for r in ui_roots if r not in settings.watch_roots_resolved]
+    return FolderWatcher(roots, submit=submit, active_jobs=active_jobs, sweep_embeddings=sweep,
                          interval_seconds=settings.watcher_interval_seconds, stable_seconds=settings.watcher_stable_seconds,
                          max_active_jobs=settings.watcher_max_active_jobs, state_file=settings.watcher_state_file, enabled=settings.watcher_enabled)
 
@@ -121,6 +127,7 @@ def create_app() -> FastAPI:
     app.include_router(composer_router)  # Video Composer (COMPOSER_ENABLED gates it)
     app.include_router(content_router)
     app.include_router(publish_router)
+    app.include_router(nas_router)
     app.include_router(admin_router)
 
     @app.get("/health", include_in_schema=False)
