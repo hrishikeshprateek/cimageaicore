@@ -149,6 +149,16 @@ def create_app() -> FastAPI:
         return RedirectResponse("/admin#drafts", status_code=302)
 
     app.mount("/static", StaticFiles(directory=WEB_DIR / "admin"), name="static")
+
+    @app.middleware("http")
+    async def no_stale_ui(request, call_next):
+        """The admin UI is plain files: make browsers revalidate them on every load so an updated server never shows an
+        old page from cache (StaticFiles answers 304 when unchanged, so this costs nothing)."""
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/admin" or path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
     return app
 
 
