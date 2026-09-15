@@ -4,7 +4,7 @@ Event-driven AI media system for CIMAGE: watch the NAS, turn videos/documents in
 structured **knowledge blocks**, store them in PostgreSQL + pgvector, and (later) draft
 blogs/social posts for human approval and WordPress publishing.
 
-**Current milestone: V0.5/V0.6 — video → knowledge blocks → hybrid search → content-opportunity queue → grounded blog drafts → review (approve / edit / reject).** Publishing to WordPress is V1.0.
+**Current milestone: V1.0 — video → knowledge blocks → hybrid search → content-opportunity queue → grounded blog drafts with pictures → review (approve / edit / reject) → WordPress publishing (draft or live, per site).**
 See [docs/BUILD_SPEC.md](docs/BUILD_SPEC.md) for the full architecture and build order.
 
 ## Quick start (development, MacBook)
@@ -91,7 +91,16 @@ data/               uploads/, jobs/, analyses/, nas-test/   (git-ignored)
 
 Benchmark any combination with `python scripts/analyze.py <video> --model … --thinking … --resolution … --fps …`.
 
-## Embeddings (V0.3)
+## Upload proxies (raw camera files)
+
+Gemini charges per **second** of video (~1 frame/s sampled + audio), never per byte — a 21 GB ProRes master and a 200 MB
+H.264 of the same ten minutes cost the same. Bytes only hurt: the File API refuses anything over 2 GB, and a 21 GB upload
+takes ~15 min on 200 Mbps. So `services/block_engine/proxy.py` probes every local source before upload and, when it is
+≥ `PROXY_MIN_MB` (400), above `PROXY_MAX_BITRATE_KBPS` (6 Mbps) or over the 2 GB limit, transcodes it to a
+`PROXY_MAX_HEIGHT` (720p) H.264 / AAC proxy at CRF 28 — typically 50–200× smaller — and uploads that instead. The job
+shows a `TRANSCODING` stage with the reason, sizes, ratio and seconds. The original never moves (the Reels studio cuts
+from it); the proxy is deleted after analysis unless `PROXY_KEEP=true`. Phone/H.264 exports under the thresholds go as-is.
+
 
 `gemini-embedding-2` at 768 dimensions (documents as `title: … | text: …`, queries as `task: search result | query: …`),
 stored in `knowledge_blocks.embedding` with an HNSW cosine index. Free tier: 100 RPM / 1K RPD; paid $0.20 per 1M tokens
@@ -147,6 +156,29 @@ approve / needs changes / reject; `#drafts/<id>` deep-links), Reels studio (the 
 Folder watcher, Activity log. The old stand-alone pages (`/`, `/content`, `/composer`) redirect into their sections; their
 files are kept under `web/_legacy/` and are not served. Data: `apps/api/admin_routes.py` (`/admin/overview`, `/watcher*`,
 `/audit`) plus the existing routers. Deployment: `docs/DEPLOY.md`.
+
+## Publishing to WordPress (V1.0)
+
+**Admin → Publishing** holds the websites: name, URL, WordPress username and an *application password* (Users → Profile →
+Application Passwords), a per-site mode (**create a WP draft** you press Publish on, or **publish live**), *auto on approval*,
+a default category and the SEO plugin (Yoast / Rank Math get title + meta description). The password is Fernet-encrypted at
+rest with `PUBLISH_SECRET_KEY` (or a key generated once into `DATA_DIR/.secret_key`) and is never returned by the API.
+**Test** checks the REST API (`/wp-json`, falling back to `?rest_route=`) and the account's capabilities.
+
+Approving a draft (`POST /drafts/{id}/status approved`) sends it to every enabled site with auto-publish, in that site's mode;
+**Publish** on an approved draft sends it to chosen sites with an optional mode override, and a site that already has the
+article gets the same post updated. The hero becomes the featured image, inline pictures are uploaded to the media library once
+(reused on re-publish) and the article is converted to Gutenberg block markup (`services/publishing/markdown_blocks.py`)
+laid out per site (`layout`, defaults = cimage.in's house style: the lead image in the body after the intro paragraph — the
+Elementor post template does not show the featured image — each section's picture directly under its heading, no captions);
+tags/category are created if missing. Everything is recorded in `publications` (`database/migrations/012_publishing.sql`)
+and the audit log (`publication.draft|published|failed`). Tested against a fake WordPress (`tests/test_publishing.py`).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET/POST` | `/api/v1/publish/targets` · `PUT/DELETE /{id}` · `POST /{id}/test` | websites |
+| `POST` | `/api/v1/drafts/{id}/publish` `{target_ids?, mode?}` | publish / re-publish an approved draft (202) |
+| `GET` | `/api/v1/drafts/{id}/publications` · `/api/v1/publish/publications` | what went where |
 
 ## Video Composer (V0.7)
 

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "CIMAGE AI Media Platform"
-    app_version: str = "0.8.0"
+    app_version: str = "0.9.1"
 
     ai_provider: Literal["auto", "gemini", "mock"] = "auto"
 
@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     blog_prompt_version: str = "blog_v2"   # v2: depth modes + pictures from video frames / the local library
     blog_model: str = ""              # blank = same model as video analysis
     blog_thinking_level: str = "medium"
+
+    # upload proxies: raw camera files are shrunk (720p H.264) before they go to Gemini. Cost is per second of video,
+    # not per byte, so nothing is lost; files over 2 GB can't be uploaded at all without this.
+    proxy_enabled: bool = True
+    proxy_min_mb: int = 400
+    proxy_max_height: int = 720
+    proxy_max_bitrate_kbps: int = 6000
+    proxy_crf: int = 28
+    proxy_keep: bool = False
+    proxy_timeout_seconds: int = 7200
 
     # folder watcher (V0.4): the NAS drops videos, the platform picks them up on its own
     watcher_enabled: bool = False
@@ -112,6 +122,10 @@ class Settings(BaseSettings):
         return [(Path(r) if Path(r).is_absolute() else REPO_ROOT / r).resolve() for r in raw]
 
     @property
+    def proxies_dir(self) -> Path:
+        return self.data_dir / "proxies"
+
+    @property
     def watcher_state_file(self) -> Path:
         return self.data_dir / "watcher_state.json"
 
@@ -122,7 +136,7 @@ class Settings(BaseSettings):
         return self.ai_provider
 
     def ensure_dirs(self) -> None:
-        for d in (self.uploads_dir, self.jobs_dir, self.analyses_dir, *self.allowed_roots):
+        for d in (self.uploads_dir, self.jobs_dir, self.analyses_dir, self.proxies_dir, *self.allowed_roots):
             d.mkdir(parents=True, exist_ok=True)
 
 

@@ -1,9 +1,9 @@
-# API + PostgreSQL/pgvector + Redis + Ollama (local embeddings, no API cost).
-# First start:  docker compose up -d && docker compose exec ollama ollama pull embeddinggemma
-# Then open http://<host>:8000/admin. Videos dropped into the watched folder (NAS_WATCH_DIR below) are analysed on their own.
+# The whole platform on one box: API (+ folder watcher, workers, admin panel), PostgreSQL/pgvector, Redis, Ollama (local embeddings).
+# First start:  cp .env.example .env  (fill GEMINI_API_KEY, NAS_WATCH_DIR, PUBLISH_SECRET_KEY)  ->  docker compose up -d
+# The embedding model is pulled automatically (ollama-pull); open http://<host>:8000/admin once `docker compose ps` shows api healthy.
 services:
   api:
-    image: ${API_IMAGE:-hrishikeshprateek/cimage-ai-api:0.8.0}   # published on Docker Hub: `docker compose pull` needs no build; `docker compose build` overwrites it locally
+    image: ${API_IMAGE:-hrishikeshprateek/cimage-ai-api:0.9.1}   # published on Docker Hub (linux/amd64 + arm64): `docker compose pull` needs no build
     build:
       context: .
       dockerfile: docker/api.Dockerfile
@@ -19,11 +19,22 @@ services:
       WATCHER_ENABLED: "true"        # scan the folder below; new videos -> analysis -> blocks -> embeddings -> draft
       WATCH_ROOTS: /nas/AI-Test
       AUTO_DRAFT: "true"             # the best opportunity of every finished video becomes a blog draft for review
+      COMPOSER_TEMPLATES_DIR: /data/composer/templates   # keep templates (the real frame PNGs) and renders on the data volume
+      COMPOSER_RENDERS_DIR: /data/renders
     ports: ["8000:8000"]
     volumes:
       - ./data:/data
       - ${NAS_WATCH_DIR:-./data/nas-test}:/nas:ro   # the NAS share (read-only); set NAS_WATCH_DIR=/mnt/nas in .env on the server
-    depends_on: [postgres, redis, ollama]
+    depends_on:
+      postgres: { condition: service_healthy }   # never start against a half-initialised database (the API would fall back to JSON files)
+      redis: { condition: service_healthy }
+      ollama: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if b'ok' in urllib.request.urlopen('http://localhost:8000/health', timeout=5).read() else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
 
   postgres:
     image: pgvector/pgvector:pg17
@@ -32,22 +43,47 @@ services:
       POSTGRES_USER: cimage
       POSTGRES_PASSWORD: cimage
       POSTGRES_DB: cimage_ai
-    ports: ["5433:5432"]   # 5433 on the host: a local Homebrew Postgres owns 5432
+    ports: ["127.0.0.1:5433:5432"]   # localhost only: never expose the database on the LAN; 5433 because a local Postgres may own 5432
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro   # first init applies every migration; the API re-checks on each start
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cimage -d cimage_ai"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
-    restart: unless-stopped   # come back after a reboot / Docker restart; only `docker compose stop` keeps it down
-    ports: ["6380:6379"]   # 6380 on the host: a local Redis owns 6379
+    restart: unless-stopped
+    ports: ["127.0.0.1:6380:6379"]   # localhost only
     volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   ollama:
     image: ollama/ollama
     restart: unless-stopped
-    ports: ["11434:11434"]   # handy for `ollama` CLI / scripts on the host; drop if the box is exposed
+    ports: ["127.0.0.1:11434:11434"]   # localhost only: the `ollama` CLI on the host can still talk to it
     volumes: [ollama:/root/.ollama]   # pulled models live here (embeddinggemma ≈ 620 MB)
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  ollama-pull:   # one-shot: pulls the embedding model into the ollama volume, then exits (re-runs harmlessly on every `up`)
+    image: ollama/ollama
+    restart: "no"
+    environment: { OLLAMA_HOST: "http://ollama:11434" }
+    entrypoint: ["/bin/sh", "-c", "ollama pull ${OLLAMA_EMBED_MODEL:-embeddinggemma}"]
+    depends_on:
+      ollama: { condition: service_healthy }
 
 volumes:
   pgdata:

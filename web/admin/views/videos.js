@@ -3,7 +3,7 @@ import { api, upload, esc, attr, icon, num, ago, dt, dur, bytes, tm, costOf, inr
 
 export const title = 'Videos';
 export const subtitle = 'every analysed video and its knowledge blocks';
-const STATES = ['RECEIVED', 'STABLE', 'QUEUED', 'UPLOADED', 'ANALYZING', 'BLOCKS_PARTIAL', 'BLOCKS_COMPLETE', 'EMBEDDING', 'INDEXED', 'CONTENT_CANDIDATE'];
+const STATES = ['RECEIVED', 'STABLE', 'QUEUED', 'TRANSCODING', 'UPLOADED', 'ANALYZING', 'BLOCKS_PARTIAL', 'BLOCKS_COMPLETE', 'EMBEDDING', 'INDEXED', 'CONTENT_CANDIDATE'];
 const TERMINAL = ['BLOCKS_COMPLETE', 'INDEXED', 'CONTENT_CANDIDATE', 'FAILED'];
 const hasResult = (j) => ['BLOCKS_COMPLETE', 'EMBEDDING', 'INDEXED', 'CONTENT_CANDIDATE'].includes(j.state);
 const FILTERS = [['all', 'All', () => true], ['running', 'Running', (j) => !TERMINAL.includes(j.state)], ['CONTENT_CANDIDATE', 'Candidates', (j) => j.state === 'CONTENT_CANDIDATE'], ['INDEXED', 'Indexed', (j) => j.state === 'INDEXED'], ['BLOCKS_COMPLETE', 'Complete', (j) => j.state === 'BLOCKS_COMPLETE'], ['FAILED', 'Failed', (j) => j.state === 'FAILED']];

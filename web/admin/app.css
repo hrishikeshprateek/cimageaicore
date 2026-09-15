@@ -115,7 +115,7 @@ html{scroll-behavior:smooth}
 .tag.violet,.tag.BLOCKS_COMPLETE,.tag.INDEXED,.tag.drafted,.tag.accepted{background:var(--g-purple-bg);color:var(--g-purple)}
 .tag.err,.tag.FAILED,.tag.failed,.tag.rejected,.tag.dismissed,.tag.error{background:var(--g-red-bg);color:var(--g-red-dark)}
 .tag.warn,.tag.new,.tag.pending{background:var(--g-yellow-bg);color:var(--g-yellow-text)}
-.tag.info,.tag.in_review,.tag.generating,.tag.ANALYZING,.tag.UPLOADED,.tag.QUEUED,.tag.STABLE,.tag.RECEIVED,.tag.BLOCKS_PARTIAL,.tag.EMBEDDING,.tag.RENDERING,.tag.deduplicated,.tag.skipped{background:var(--g-blue-bg);color:var(--g-blue-text)}
+.tag.info,.tag.in_review,.tag.generating,.tag.ANALYZING,.tag.UPLOADED,.tag.QUEUED,.tag.TRANSCODING,.tag.STABLE,.tag.RECEIVED,.tag.BLOCKS_PARTIAL,.tag.EMBEDDING,.tag.RENDERING,.tag.deduplicated,.tag.skipped{background:var(--g-blue-bg);color:var(--g-blue-text)}
 .tag.gold{background:var(--g-yellow-bg);color:var(--g-yellow-text)}
 
 /* ---------- cards (Google: white, 8px, 1px #dadce0) ---------- */

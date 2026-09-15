@@ -9,8 +9,9 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from services.ai_gateway.base import AIProvider, ExtraPass, RawModelOutput, StageCallback, VideoAnalysisRequest, sum_usage
+from services.ai_gateway.base import AIProvider, ExtraPass, RawModelOutput, StageCallback, VideoAnalysisRequest, VideoInput, sum_usage
 from services.block_engine.media import ts_to_seconds
+from services.block_engine.proxy import ProxyPolicy, make_proxy, probe, proxy_reason
 from services.block_engine.schemas import AnalysisResult, PeoplePassV1, PersonBlock, UsageInfo, VideoAnalysisV1, normalise_timestamps, provider_json_schema
 from services.block_engine.sources import VideoSource
 
@@ -56,8 +57,12 @@ class BlockEngine:
         known_people_file: Path | None = None,
         retry_on_coarse_transcript: bool = True,
         people_pass_version: str | None = "people_v1",
+        proxy: ProxyPolicy | None = None,
+        proxies_dir: Path | None = None,
     ):
         self.provider = provider
+        self.proxy = proxy
+        self.proxies_dir = proxies_dir
         self.retry_on_coarse_transcript = retry_on_coarse_transcript
         self.prompt_version = prompt_version
         self.institution_context = institution_context
@@ -71,9 +76,42 @@ class BlockEngine:
 
     def analyze(self, job_id: str, source: VideoSource, on_stage: StageCallback) -> AnalysisResult:
         started = time.monotonic()
+        video, proxy_path = self._upload_input(job_id, source, on_stage)
+        try:
+            return self._analyze(job_id, source, video, on_stage, started)
+        finally:
+            if proxy_path is not None and not (self.proxy and self.proxy.keep):
+                proxy_path.unlink(missing_ok=True)
+
+    def _upload_input(self, job_id: str, source: VideoSource, on_stage: StageCallback) -> tuple[VideoInput, Path | None]:
+        """What goes to the provider: the file itself, or a small H.264 proxy when the source is raw/huge (see proxy.py).
+        Only local files are candidates; the mock provider and URL sources never transcode."""
+        video = source.to_input()
+        if source.path is None or self.proxies_dir is None or self.provider.name == "mock":
+            return video, None
+        policy = self.proxy or ProxyPolicy(enabled=False)
+        try:
+            info = probe(source.path)
+            reason = proxy_reason(info, policy)
+        except Exception as exc:  # noqa: BLE001 - an unprobeable file is the provider's problem to report
+            log.warning("proxy probe failed for %s: %s", source.path.name, exc)
+            return video, None
+        if reason is None:
+            return video, None
+        out = self.proxies_dir / f"{source.info.sha256 or job_id}.mp4"
+        on_stage("TRANSCODING", {"reason": reason, "source_bytes": info.size_bytes, "source": f"{info.width}x{info.height} {info.video_codec or '?'} {info.bitrate_kbps / 1000:.1f} Mbps",
+                                 "target": f"{policy.max_height}p H.264 crf {policy.crf}"})
+        t0 = time.monotonic()
+        if not out.exists():
+            make_proxy(source.path, out, policy, info=info)
+        size = out.stat().st_size
+        on_stage("TRANSCODING", {"done": True, "proxy_bytes": size, "ratio": round(info.size_bytes / max(size, 1), 1), "seconds": round(time.monotonic() - t0, 1), "proxy": str(out)})
+        return VideoInput(name=source.info.name, path=out, url=None, mime_type="video/mp4"), out
+
+    def _analyze(self, job_id: str, source: VideoSource, video: VideoInput, on_stage: StageCallback, started: float) -> AnalysisResult:
         fmt = {"institution_context": self.institution_context, "known_people": self.known_people, "source_name": source.info.name}
         request = VideoAnalysisRequest(
-            video=source.to_input(),
+            video=video,
             system_instruction=self.system_template.format(**fmt),  # unused keys are ignored
             prompt=self.user_template.format(**fmt),
             json_schema=self.json_schema,

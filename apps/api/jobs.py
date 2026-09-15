@@ -26,6 +26,7 @@ class JobState(str, Enum):
     RECEIVED = "RECEIVED"
     STABLE = "STABLE"
     QUEUED = "QUEUED"
+    TRANSCODING = "TRANSCODING"    # raw/huge source being shrunk into an upload proxy
     UPLOADED = "UPLOADED"
     ANALYZING = "ANALYZING"
     BLOCKS_PARTIAL = "BLOCKS_PARTIAL"

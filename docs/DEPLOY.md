@@ -40,13 +40,23 @@ points at the current release, so a server only needs the repo's config files, n
 
 ```bash
 git clone <repo> cimage-ai && cd cimage-ai        # or copy docker-compose.yml + .env.example + database/ + data/composer/
-cp .env.example .env && nano .env                 # GEMINI_API_KEY, NAS_WATCH_DIR, COMPOSER_ENABLED ...
-docker compose pull                               # api (≈1.2 GB), postgres, redis, ollama
-docker compose up -d
-docker compose exec ollama ollama pull embeddinggemma
+cp .env.example .env && nano .env                 # GEMINI_API_KEY, NAS_WATCH_DIR, COMPOSER_ENABLED=true, PUBLISH_SECRET_KEY
+docker compose up -d                              # pulls api (≈650 MB, linux/amd64), pgvector, redis, ollama; the embedding model is pulled by `ollama-pull`
+docker compose ps                                 # wait until api is "healthy" and ollama-pull has exited (0)
+curl -s localhost:8000/api/v1/system              # expect "store":"postgres" and "embedder":"ollama"
 ```
 
-Upgrade to a newer release: change the tag in `docker-compose.yml` (or `export API_IMAGE=hrishikeshprateek/cimage-ai-api:0.9.0`),
+The compose file waits for Postgres, Redis and Ollama to be **healthy** before starting the API (a fresh database takes
+a few seconds to initialise; without the wait the API would fall back to JSON files). Postgres, Redis and Ollama listen
+on **localhost only**; the only LAN port is 8000. Templates (the real frame PNGs), renders and images live under `./data`
+(mounted at `/data`), so `docker compose down && up` keeps them.
+
+Moving an existing installation (e.g. from the dev Mac): `docker compose exec postgres pg_dump -U cimage cimage_ai > cimage.sql`
+on the old box, copy `cimage.sql` + the `data/` folder to the server, then on the server after the first `up`:
+`docker compose exec -T postgres psql -U cimage cimage_ai < cimage.sql`. Use the **same** `PUBLISH_SECRET_KEY`, or re-enter the
+WordPress application passwords in Admin → Publishing.
+
+Upgrade to a newer release: change the tag in `docker-compose.yml` (or `export API_IMAGE=hrishikeshprateek/cimage-ai-api:0.10.0`),
 then `docker compose pull && docker compose up -d` — migrations run on startup, data volumes are untouched.
 
 No internet on the server? `dist/cimage-ai-api-<version>.tar.gz` (made with `docker save`) can be copied over and loaded with
@@ -55,10 +65,13 @@ No internet on the server? `dist/cimage-ai-api-<version>.tar.gz` (made with `doc
 Publishing a release from the dev machine (maintainers):
 
 ```bash
-docker compose build api                                       # builds cimage-ai/api:<version> from pyproject's version
-docker tag cimage-ai/api:0.8.0 hrishikeshprateek/cimage-ai-api:0.8.0
-docker tag cimage-ai/api:0.8.0 hrishikeshprateek/cimage-ai-api:latest
-docker push hrishikeshprateek/cimage-ai-api:0.8.0 && docker push hrishikeshprateek/cimage-ai-api:latest
+# multi-arch: the production box is x86-64 (AMD), the dev Mac is arm64 - a plain `docker build` on the Mac gives an arm64-only image
+docker buildx build --platform linux/amd64,linux/arm64 -f docker/api.Dockerfile \
+  -t hrishikeshprateek/cimage-ai-api:0.9.1 -t hrishikeshprateek/cimage-ai-api:latest --push .
+docker manifest inspect hrishikeshprateek/cimage-ai-api:0.9.1 | grep architecture     # expect amd64 + arm64
+# offline copy (Docker Desktop's containerd store saves BOTH platforms into one tarball; `docker load` picks the server's):
+docker save hrishikeshprateek/cimage-ai-api:0.9.1 | gzip -1 > dist/cimage-ai-api-0.9.0.tar.gz     # ≈ 650 MB
+# note: dist/cimage-ai-api-0.8.0.tar.gz and the 0.8.0 tag on Docker Hub are arm64-only and will not run on the AMD server
 ```
 
 ## 2b. App — build from source
@@ -81,8 +94,7 @@ COMPOSER_ENABLED=true
 Start:
 
 ```bash
-docker compose up -d --build
-docker compose exec ollama ollama pull embeddinggemma     # once, ~620 MB (kept in the `ollama` volume)
+docker compose up -d --build                              # the embedding model is pulled automatically (ollama-pull, ~620 MB, kept in the `ollama` volume)
 docker compose logs -f api                                # wait for "Application startup complete"
 ```
 
@@ -93,7 +105,7 @@ brings the stack back on its own; only `docker compose stop` keeps it down.
 
 | Task | How |
 |---|---|
-| Analyse a video | copy it into `/mnt/nas/AI-Test` — nothing else. The watcher waits until the copy finishes, dedupes by content hash, queues the analysis, embeds the blocks, extracts opportunities and drafts the best one. |
+| Analyse a video | copy it into `/mnt/nas/AI-Test` — nothing else, raw camera files included. The watcher waits until the copy finishes, dedupes by content hash, shrinks raw/huge files to a 720p upload proxy (cost is per second of video, not per byte; >2 GB can't be uploaded otherwise), queues the analysis, embeds the blocks, extracts opportunities and drafts the best one. |
 | See what's happening | `/admin` → Overview (pipeline strip, spend, what needs a decision) and Folder watcher (files seen, queued, duplicates, errors, per-file result, pause / scan now / re-scan). |
 | Review an article | `/admin` → Review drafts → read → **Approve** / Needs changes / Reject, or Edit (saves a new version). Every decision lands in the Activity log. |
 | Re-analyse a file that was replaced | Folder watcher → *re-scan* next to the file (or drop it under a new name). |

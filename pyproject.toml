@@ -1,6 +1,6 @@
 [project]
 name = "cimage-ai"
-version = "0.8.0"
+version = "0.9.1"
 description = "CIMAGE AI Media Platform - Video -> Knowledge Blocks engine (V0.1)"
 requires-python = ">=3.12"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "psycopg_pool>=3.2",
     "pillow>=10.4",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

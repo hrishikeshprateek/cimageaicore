@@ -324,7 +324,17 @@ def set_draft_status(request: Request, did: str, body: DraftStatusChange) -> Dra
     if d.status in ("generating", "failed"):
         raise HTTPException(409, f"draft is {d.status}")
     request.app.state.store.audit("editor", f"draft.{body.status}", "draft", did, {"from": d.status})
-    return cs.set_draft_status(did, body.status)
+    updated = cs.set_draft_status(did, body.status)
+    if body.status == "approved":
+        from apps.api.publish_routes import auto_publish
+
+        try:
+            queued = auto_publish(request, updated)
+            if queued:
+                log.info("draft %s approved -> publishing to %d target(s)", did, len(queued))
+        except Exception as exc:  # noqa: BLE001 - approval must succeed even if publishing cannot start
+            log.exception("auto-publish for %s could not start: %s", did, exc)
+    return updated
 
 
 @router.get("/agent-runs")

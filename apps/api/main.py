@@ -13,6 +13,7 @@ from apps.api.admin_routes import router as admin_router
 from apps.api.composer_routes import router as composer_router
 from apps.api.config import REPO_ROOT, get_settings
 from apps.api.content_routes import auto_draft_job, router as content_router
+from apps.api.publish_routes import router as publish_router
 from apps.api.ingest import submit_source
 from apps.api.jobs import JobRunner, JsonJobStore, embed_job_blocks
 from apps.api.routes import router
@@ -21,6 +22,7 @@ from services.ingestion.watcher import FolderWatcher
 from services.ai_gateway import build_provider
 from services.ai_gateway.embeddings import build_embedder
 from services.block_engine.engine import BlockEngine
+from services.block_engine.proxy import ProxyPolicy
 from services.retrieval.retriever import Retriever
 from agents.blog_agent.agent import BlogAgent
 
@@ -35,7 +37,9 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     settings.ensure_dirs()
     provider = build_provider(settings)
-    engine = BlockEngine(provider, prompt_version=settings.prompt_version, institution_context=settings.institution_context, known_people_file=settings.known_people_file, people_pass_version=settings.people_pass_version or None)
+    engine = BlockEngine(provider, prompt_version=settings.prompt_version, institution_context=settings.institution_context, known_people_file=settings.known_people_file, people_pass_version=settings.people_pass_version or None,
+                         proxy=ProxyPolicy(enabled=settings.proxy_enabled, min_mb=settings.proxy_min_mb, max_height=settings.proxy_max_height, max_bitrate_kbps=settings.proxy_max_bitrate_kbps,
+                                           crf=settings.proxy_crf, keep=settings.proxy_keep, timeout_seconds=settings.proxy_timeout_seconds), proxies_dir=settings.proxies_dir)
     store = _build_store(settings)
     loaded = store.load()
     embedder = build_embedder(settings)
@@ -116,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(composer_router)  # Video Composer (COMPOSER_ENABLED gates it)
     app.include_router(content_router)
+    app.include_router(publish_router)
     app.include_router(admin_router)
 
     @app.get("/health", include_in_schema=False)

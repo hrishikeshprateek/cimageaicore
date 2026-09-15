@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from apps.api.config import REPO_ROOT
@@ -19,8 +19,8 @@ class ComposerSettings(BaseSettings):
 
     enabled: bool = False
     template: str = "placeholder"                                   # templates_dir/<name>/template.json (placeholder is generated)
-    templates_dir: Path = REPO_ROOT / "data" / "composer" / "templates"
-    renders_dir: Path = REPO_ROOT / "data" / "renders"
+    templates_dir: Path | None = None                               # blank = <DATA_DIR>/composer/templates (DATA_DIR from the main settings / Docker)
+    renders_dir: Path | None = None                                 # blank = <DATA_DIR>/renders
     font_regular: Path | None = None                                # blank = bundled Poppins (Latin + Devanagari)
     font_bold: Path | None = None
     font_fallback_regular: Path | None = None                       # blank = bundled Noto Sans Devanagari (used for runs the primary font cannot draw)
@@ -52,10 +52,22 @@ class ComposerSettings(BaseSettings):
 
     worker_threads: int = 1
 
-    @field_validator("font_regular", "font_bold", "font_fallback_regular", "font_fallback_bold", "fribidi_lib_dir", mode="before")
+    @field_validator("templates_dir", "renders_dir", "font_regular", "font_bold", "font_fallback_regular", "font_fallback_bold", "fribidi_lib_dir", mode="before")
     @classmethod
     def _blank_is_none(cls, v):
         return None if v in ("", None) else v
+
+    @model_validator(mode="after")
+    def _resolve_dirs(self) -> "ComposerSettings":
+        """Templates and renders live under the platform's DATA_DIR unless set explicitly (so Docker's /data volume keeps them)."""
+        from apps.api.config import get_settings
+
+        data_dir = get_settings().data_dir
+        if self.templates_dir is None:
+            self.templates_dir = data_dir / "composer" / "templates"
+        if self.renders_dir is None:
+            self.renders_dir = data_dir / "renders"
+        return self
 
     @property
     def font_regular_path(self) -> Path:
