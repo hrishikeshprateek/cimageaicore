@@ -136,8 +136,15 @@ class Settings(BaseSettings):
         return self.ai_provider
 
     def ensure_dirs(self) -> None:
-        for d in (self.uploads_dir, self.jobs_dir, self.analyses_dir, self.proxies_dir, *self.allowed_roots):
+        for d in (self.uploads_dir, self.jobs_dir, self.analyses_dir, self.proxies_dir):
             d.mkdir(parents=True, exist_ok=True)
+        for d in self.allowed_roots:   # NAS mounts may be read-only or not connected yet: never fatal, the watcher skips missing roots
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                import logging
+
+                logging.getLogger(__name__).warning("allowed root %s is not creatable (%s) - it will be used once it exists", d, exc)
 
 
 @lru_cache
