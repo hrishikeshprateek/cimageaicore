@@ -3,7 +3,7 @@
 # Then open http://<host>:8000/admin. Videos dropped into the watched folder (NAS_WATCH_DIR below) are analysed on their own.
 services:
   api:
-    image: ${API_IMAGE:-cimage-ai/api:0.8.0}   # `docker compose build` tags the local build; set API_IMAGE to pull a published one
+    image: ${API_IMAGE:-hrishikeshprateek/cimage-ai-api:0.8.0}   # published on Docker Hub: `docker compose pull` needs no build; `docker compose build` overwrites it locally
     build:
       context: .
       dockerfile: docker/api.Dockerfile

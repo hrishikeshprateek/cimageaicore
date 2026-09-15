@@ -33,7 +33,35 @@ Mount the college NAS read-only (one line in `/etc/fstab`; `nofail` so a NAS out
 `/etc/nas.cred` holds `username=` / `password=` of a **read-only** NAS account (`chmod 600`). Create the drop folder
 the watcher scans, e.g. `/mnt/nas/AI-Test` (the spec: watch `/AI-Test` only, not the whole NAS).
 
-## 2. App
+## 2. App — pull from Docker Hub (no build on the server)
+
+Every release is published as `hrishikeshprateek/cimage-ai-api:<version>` (and `:latest`). The compose file already
+points at the current release, so a server only needs the repo's config files, not a Python toolchain:
+
+```bash
+git clone <repo> cimage-ai && cd cimage-ai        # or copy docker-compose.yml + .env.example + database/ + data/composer/
+cp .env.example .env && nano .env                 # GEMINI_API_KEY, NAS_WATCH_DIR, COMPOSER_ENABLED ...
+docker compose pull                               # api (≈1.2 GB), postgres, redis, ollama
+docker compose up -d
+docker compose exec ollama ollama pull embeddinggemma
+```
+
+Upgrade to a newer release: change the tag in `docker-compose.yml` (or `export API_IMAGE=hrishikeshprateek/cimage-ai-api:0.9.0`),
+then `docker compose pull && docker compose up -d` — migrations run on startup, data volumes are untouched.
+
+No internet on the server? `dist/cimage-ai-api-<version>.tar.gz` (made with `docker save`) can be copied over and loaded with
+`docker load < cimage-ai-api-<version>.tar.gz`; the tag inside matches the compose file.
+
+Publishing a release from the dev machine (maintainers):
+
+```bash
+docker compose build api                                       # builds cimage-ai/api:<version> from pyproject's version
+docker tag cimage-ai/api:0.8.0 hrishikeshprateek/cimage-ai-api:0.8.0
+docker tag cimage-ai/api:0.8.0 hrishikeshprateek/cimage-ai-api:latest
+docker push hrishikeshprateek/cimage-ai-api:0.8.0 && docker push hrishikeshprateek/cimage-ai-api:latest
+```
+
+## 2b. App — build from source
 
 ```bash
 git clone <repo> cimage-ai && cd cimage-ai
@@ -70,7 +98,7 @@ brings the stack back on its own; only `docker compose stop` keeps it down.
 | Review an article | `/admin` → Review drafts → read → **Approve** / Needs changes / Reject, or Edit (saves a new version). Every decision lands in the Activity log. |
 | Re-analyse a file that was replaced | Folder watcher → *re-scan* next to the file (or drop it under a new name). |
 | Watch logs | `docker compose logs -f api` |
-| Update the app | `git pull && docker compose up -d --build` (migrations run on startup) |
+| Update the app | bump the tag in `docker-compose.yml`, then `docker compose pull && docker compose up -d` (migrations run on startup); or `docker compose up -d --build` when building from source |
 | Backup | `docker compose exec postgres pg_dump -U cimage cimage_ai > backup.sql` plus the `./data` folder (uploads, renders, images) |
 
 Search works without internet (local embeddings); if Ollama is down, search degrades to keyword-only and the
