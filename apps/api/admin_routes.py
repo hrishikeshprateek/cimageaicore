@@ -113,7 +113,7 @@ def overview(request: Request) -> dict[str, Any]:
 
     return {
         "system": {
-            "version": settings.app_version, "provider": st.engine.provider.name, "model": st.engine.provider.model,
+            "version": settings.app_version, "build": settings.app_git_sha, "provider": st.engine.provider.name, "model": st.engine.provider.model,
             "embedder": st.embedder.name, "embedding_model": st.embedder.model, "store": store.kind,
             "auto_draft": settings.auto_draft, "watcher_enabled": settings.watcher_enabled,
         },

@@ -3,10 +3,13 @@
 # The embedding model is pulled automatically (ollama-pull); open http://<host>:8000/admin once `docker compose ps` shows api healthy.
 services:
   api:
-    image: ${API_IMAGE:-hrishikeshprateek/cimage-ai-api:0.9.1}   # last tag pushed to Docker Hub (amd64 + arm64); bump to 0.9.2 once that image is built and pushed
+    image: ${API_IMAGE:-hrishikeshprateek/cimage-ai-api:latest}   # install/update scripts BUILD this from the checked-out source (always the code in git); PULL_IMAGE=1 pulls it from Docker Hub instead
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}            # scripts export these before `docker compose build`
+        BUILD_DATE: ${BUILD_DATE:-}
     env_file: .env
     restart: unless-stopped   # come back after a reboot / Docker restart; only `docker compose stop` keeps it down
     environment:

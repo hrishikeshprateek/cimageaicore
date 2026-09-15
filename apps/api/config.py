@@ -16,6 +16,8 @@ class Settings(BaseSettings):
 
     app_name: str = "CIMAGE AI Media Platform"
     app_version: str = "0.9.2"
+    app_git_sha: str = "dev"          # stamped into the Docker image at build time (APP_GIT_SHA)
+    app_build_date: str = ""
 
     ai_provider: Literal["auto", "gemini", "mock"] = "auto"
 

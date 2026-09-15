@@ -25,6 +25,7 @@ def system(request: Request) -> dict:
     return {
         "app": s.app_name,
         "version": s.app_version,
+        "build": {"git_sha": s.app_git_sha, "date": s.app_build_date},
         "provider": engine.provider.name,
         "model": engine.provider.model,
         "store": request.app.state.store.kind,

@@ -1,0 +1,16 @@
+# keep the build context small: the image only needs the source tree
+.git
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+data
+dist
+docs
+tests
+web/_legacy
+.env
+.env.*
+*.log
+.DS_Store

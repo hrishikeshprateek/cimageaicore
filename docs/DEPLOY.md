@@ -45,8 +45,15 @@ GEMINI_API_KEY=... NAS_WATCH_DIR=/mnt/nas bash -c "$(curl -fsSL https://raw.gith
 
 `scripts/install-server.sh` installs Docker if needed, clones the repo into `/opt/cimage-ai`, writes `.env` (Gemini key,
 NAS folder, `COMPOSER_ENABLED=true`, a generated `PUBLISH_SECRET_KEY`), installs a **systemd unit (`cimage-ai.service`)
-that runs `docker compose up -d` at every boot after the NAS mount**, disables sleep, and starts the stack. Re-running it is
-safe (it updates the checkout and keeps `.env`). Later updates: `bash /opt/cimage-ai/scripts/update-server.sh`.
+that runs `docker compose up -d` at every boot after the NAS mount**, disables sleep, **builds the api image from the
+checked-out source** (3–6 min the first time) and starts the stack. Re-running it is safe (it updates the checkout, keeps
+`.env`, rebuilds). Later updates: `bash /opt/cimage-ai/scripts/update-server.sh` — pulls `main`, rebuilds, restarts.
+
+Building on the server means it always runs *exactly* the code on `main`; nothing depends on someone pushing an image
+from a laptop. To use the published Docker Hub image instead (slow CPU, or no build tools): `PULL_IMAGE=1` on either script.
+
+**Which build is running?** `curl -s localhost:8000/api/v1/system` shows `"build": {"git_sha": …}`, and the admin
+sidebar footer shows the same short SHA — compare it with `git -C /opt/cimage-ai rev-parse --short HEAD`.
 
 Useful afterwards: `systemctl status cimage-ai` · `docker compose -f /opt/cimage-ai/docker-compose.yml ps` ·
 `docker compose logs -f api` · `nano /opt/cimage-ai/.env && docker compose up -d`.
@@ -80,7 +87,12 @@ then `docker compose pull && docker compose up -d` — migrations run on startup
 No internet on the server? `dist/cimage-ai-api-<version>.tar.gz` (made with `docker save`) can be copied over and loaded with
 `docker load < cimage-ai-api-<version>.tar.gz`; the tag inside matches the compose file.
 
-Publishing a release from the dev machine (maintainers):
+**Automatic image publishing**: `.github/workflows/docker-image.yml` builds a multi-arch (amd64 + arm64) image on every
+push to `main` and on `v*` tags and pushes `:latest`, `:<version>` and `:sha-<commit>` to Docker Hub. One-time setup in the
+GitHub repo: *Settings → Secrets and variables → Actions* → `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token with
+Read & Write). Until those secrets exist the workflow fails harmlessly and servers keep building from source.
+
+Publishing a release by hand from a dev machine (maintainers):
 
 ```bash
 # multi-arch: the production box is x86-64 (AMD), the dev Mac is arm64 - a plain `docker build` on the Mac gives an arm64-only image

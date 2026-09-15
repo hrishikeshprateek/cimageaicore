@@ -41,7 +41,7 @@ const setFoot = (h) => { const f = document.getElementById('navfoot'); if (f) f.
 function renderChrome() {
   const ov = ctx.overview; if (!ov) return;
   const s = ov.system, c = ov.content || {}, w = ov.watcher;
-  setFoot(`<div><span class="dot ${s.store === 'postgres' ? '' : 'warn'}"></span><b>${esc(s.store)}</b> store</div><div>AI <b>${esc(s.provider)}</b> · ${esc(s.model)}</div><div>embed <b>${esc(s.embedder)}</b> · ${esc(s.embedding_model)}</div><div>v${esc(s.version)} · auto-draft ${s.auto_draft ? 'on' : 'off'}</div>`);
+  setFoot(`<div><span class="dot ${s.store === 'postgres' ? '' : 'warn'}"></span><b>${esc(s.store)}</b> store</div><div>AI <b>${esc(s.provider)}</b> · ${esc(s.model)}</div><div>embed <b>${esc(s.embedder)}</b> · ${esc(s.embedding_model)}</div><div>v${esc(s.version)}${s.build && s.build !== 'dev' ? ' · build <span class="mono">' + esc(s.build) + '</span>' : ''} · auto-draft ${s.auto_draft ? 'on' : 'off'}</div>`);
   const badge = (id, n, warn = false) => { const b = document.getElementById(id); if (!b) return; b.hidden = !n; b.textContent = n || ''; b.classList.toggle('warn', warn); };
   badge('b-drafts', c.awaiting_review || 0); badge('b-opps', (c.opportunities || {}).new || 0); badge('b-watcher', w && w.errors_total ? w.errors_total : 0, true); badge('b-videos', ov.jobs.active || 0);
   document.getElementById('pills').innerHTML =

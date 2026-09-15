@@ -9,10 +9,12 @@
 #   2. clones / updates the repo into $INSTALL_DIR (default /opt/cimage-ai)
 #   3. creates .env from .env.example on first run and fills the keys that matter
 #   4. installs a systemd unit so `docker compose up -d` runs at every boot (after the NAS mount)
-#   5. starts the stack: api + postgres/pgvector + redis + ollama (+ pulls the embedding model)
+#   5. BUILDS the api image from the checked-out source (so the server always runs exactly the code in git),
+#      then starts the stack: api + postgres/pgvector + redis + ollama (+ pulls the embedding model)
 #
 # Environment variables you can pass instead of answering prompts:
 #   GEMINI_API_KEY, NAS_WATCH_DIR (default /mnt/nas), INSTALL_DIR, REPO_URL, GIT_REF (default main)
+#   PULL_IMAGE=1   use the published Docker Hub image instead of building (faster on slow CPUs; may lag behind git)
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/hrishikeshprateek/cimageaicore.git}"
@@ -115,10 +117,18 @@ $SUDO systemctl daemon-reload
 $SUDO systemctl enable ${SERVICE_NAME} >/dev/null
 $SUDO systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null 2>&1 || true
 
-# ---------------------------------------------------------------- 5. start
-say "Pulling images and starting the stack (first run downloads ~1.5 GB incl. the embedding model)"
-$DOCKER compose pull -q
+# ---------------------------------------------------------------- 5. build + start
+export GIT_SHA="$(git rev-parse --short HEAD)" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+$DOCKER compose pull -q postgres redis ollama 2>/dev/null || $DOCKER compose pull -q --ignore-buildable 2>/dev/null || true
+if [ "${PULL_IMAGE:-0}" = "1" ]; then
+  say "Pulling the published api image (PULL_IMAGE=1)"
+  $DOCKER compose pull -q api
+else
+  say "Building the api image from source at commit $GIT_SHA (3-6 minutes the first time; later builds reuse cached layers)"
+  $DOCKER compose build --pull api
+fi
 $DOCKER compose up -d --remove-orphans
+$DOCKER image prune -f >/dev/null 2>&1 || true   # drop superseded image layers so rebuilds don't fill the disk
 say "Waiting for the API to become healthy"
 for _ in $(seq 1 60); do
   if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then break; fi
@@ -126,7 +136,8 @@ for _ in $(seq 1 60); do
 done
 if curl -fsS http://localhost:8000/api/v1/system 2>/dev/null | grep -q '"store": *"postgres"'; then
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  say "Up. Admin: http://${ip:-<server-ip>}:8000/admin"
+  running="$(curl -fsS http://localhost:8000/api/v1/system 2>/dev/null | sed -n 's/.*"git_sha": *"\([^"]*\)".*/\1/p')"
+  say "Up. Admin: http://${ip:-<server-ip>}:8000/admin   (running build ${running:-?}, git HEAD $GIT_SHA)"
   $DOCKER compose ps
   say "The embedding model downloads in the background (docker compose logs ollama-pull). Search is keyword-only until it finishes."
 else
