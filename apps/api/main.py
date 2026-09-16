@@ -24,6 +24,9 @@ from services.ai_gateway import build_provider
 from services.ai_gateway.embeddings import build_embedder
 from services.block_engine.engine import BlockEngine
 from services.block_engine.proxy import ProxyPolicy
+from services import prompts as prompt_registry
+from services.prompts.registry import PromptRegistry
+from apps.api.prompt_routes import router as prompt_router
 from services.retrieval.retriever import Retriever
 from agents.blog_agent.agent import BlogAgent
 
@@ -37,8 +40,14 @@ log = logging.getLogger("cimage.api")
 async def lifespan(app: FastAPI):
     settings = get_settings()
     settings.ensure_dirs()
+    from services.video_composer.settings import get_composer_settings
+    registry = PromptRegistry(settings.data_dir / "prompts", settings.data_dir / "prompt_config.json",
+                              defaults={"video-analysis": settings.prompt_version, "people-pass": settings.people_pass_version or "people_v1",
+                                        "blog": settings.blog_prompt_version, "cuts": get_composer_settings().cuts_prompt_version},
+                              institution_context=settings.institution_context)
+    prompt_registry.set_current(registry)   # every load_prompt() from here on resolves through the registry (UI versions win)
     provider = build_provider(settings)
-    engine = BlockEngine(provider, prompt_version=settings.prompt_version, institution_context=settings.institution_context, known_people_file=settings.known_people_file, people_pass_version=settings.people_pass_version or None,
+    engine = BlockEngine(provider, prompt_version=registry.active("video-analysis"), institution_context=registry.institution_context, known_people_file=None, people_pass_version=registry.active("people-pass") if settings.people_pass_version else None,
                          proxy=ProxyPolicy(enabled=settings.proxy_enabled, min_mb=settings.proxy_min_mb, max_height=settings.proxy_max_height, max_bitrate_kbps=settings.proxy_max_bitrate_kbps,
                                            crf=settings.proxy_crf, keep=settings.proxy_keep, timeout_seconds=settings.proxy_timeout_seconds), proxies_dir=settings.proxies_dir)
     store = _build_store(settings)
@@ -56,10 +65,13 @@ async def lifespan(app: FastAPI):
                        on_content_candidate=lambda job_id, n: auto_draft_job(app.state, job_id))
     retriever = Retriever(store, embedder)
     blog_agent = BlogAgent(
-        provider, retriever, prompt_version=settings.blog_prompt_version, institution_context=settings.institution_context,
+        provider, retriever, prompt_version=registry.active("blog"), institution_context=registry.institution_context,
         model=settings.blog_model or None, thinking_level=settings.blog_thinking_level or None,
     )
 
+    registry.on_change(engine.reload)
+    registry.on_change(blog_agent.reload)
+    app.state.prompts = registry
     app.state.settings = settings
     app.state.engine = engine
     app.state.store = store
@@ -76,6 +88,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        prompt_registry.set_current(None)
         app.state.watcher.stop()
         runner.shutdown()
         store.close()
@@ -129,6 +142,7 @@ def create_app() -> FastAPI:
     app.include_router(publish_router)
     app.include_router(nas_router)
     app.include_router(admin_router)
+    app.include_router(prompt_router)
 
     @app.get("/health", include_in_schema=False)
     def health() -> dict:

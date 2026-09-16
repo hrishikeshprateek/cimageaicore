@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from agents.blog_agent.schemas import BlogDraftV1, BlogDraftV2, Citation, ImagePlacement
 from services.ai_gateway.base import AIProvider, RawModelOutput
+from services import prompts
 from services.block_engine.engine import PROMPTS_DIR, _fence_strip, load_prompt
 from services.block_engine.schemas import provider_json_schema
 from services.retrieval.retriever import EvidencePack, Retriever
@@ -121,10 +122,22 @@ class BlogAgent:
         self.institution_context = institution_context
         self.model = model
         self.thinking_level = thinking_level
-        self.system_template, self.user_template = load_prompt_from(PROMPTS_DIR / "content-generation" / f"{prompt_version}.md")
-        path = style_guide_path or PROMPTS_DIR / "content-generation" / "style_guide.md"
-        self.style_guide = path.read_text(encoding="utf-8") if path.exists() else "(no style guide)"
+        self.style_guide_path = style_guide_path
+        self.system_template, self.user_template = prompts.prompt("blog", prompt_version)
+        self.style_guide = self._load_style_guide()
         self.json_schema = provider_json_schema(BlogDraftV2)
+
+    def _load_style_guide(self) -> str:
+        if self.style_guide_path is not None and self.style_guide_path.exists():
+            return self.style_guide_path.read_text(encoding="utf-8")
+        return prompts.text("style-guide") or "(no style guide)"
+
+    def reload(self, registry) -> None:
+        """Pick up the active blog prompt, style guide and institution context from the registry (UI change, no restart)."""
+        self.prompt_version = registry.active("blog")
+        self.institution_context = registry.institution_context
+        self.system_template, self.user_template = registry.prompt("blog")
+        self.style_guide = registry.text("style-guide") or "(no style guide)"
 
     def draft(
         self,

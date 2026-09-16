@@ -281,8 +281,10 @@ def job_cuts(request: Request, ctx: Ctx, job_id: str, refine: bool | None = None
     want = ctx.settings.cuts_refine == "auto" if refine is None else refine
     if want:
         provider = request.app.state.engine.provider
-        cuts, warning = refine_with_ai(provider, analysis, duration, cuts, lim=ctx.limits(), prompt_version=ctx.settings.cuts_prompt_version,
-                                       institution_context=get_settings().institution_context)
+        reg = getattr(request.app.state, "prompts", None)
+        cuts, warning = refine_with_ai(provider, analysis, duration, cuts, lim=ctx.limits(),
+                                       prompt_version=reg.active("cuts") if reg else ctx.settings.cuts_prompt_version,
+                                       institution_context=reg.institution_context if reg else get_settings().institution_context)
         refined = warning is None
     return CutsResponse(job_id=job_id, duration_seconds=duration, refined=refined, warning=warning, cuts=cuts)
 

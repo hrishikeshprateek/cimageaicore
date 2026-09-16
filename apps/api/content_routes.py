@@ -133,7 +133,8 @@ def _ensure_pictures(state, job, *, force: bool, mode: str = "ai") -> tuple[list
         return images.frames_for_job(job, blocks, force=force), {"mode": "blocks"}
     provider = state.engine.provider
     try:
-        recs, meta = images.index_job(job, blocks, provider, force=force, institution_context=settings.institution_context, model=settings.blog_model or None)
+        reg = getattr(state, "prompts", None)
+        recs, meta = images.index_job(job, blocks, provider, force=force, institution_context=reg.institution_context if reg else settings.institution_context, model=settings.blog_model or None)
         return recs, {"mode": "ai", **meta}
     except Exception as exc:  # noqa: BLE001 - no vision (or a provider error): fall back to timestamp-based frames
         log.warning("AI still index for %s failed (%s); using timestamp-based frames", job.id, exc)

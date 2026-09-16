@@ -9,12 +9,13 @@ import * as composer from './views/composer.js';
 import * as watcher from './views/watcher.js';
 import * as activity from './views/activity.js';
 import * as publishing from './views/publishing.js';
+import * as prompts from './views/prompts.js';
 
-const VIEWS = { overview, videos, search, opps, drafts, composer, publishing, watcher, activity };
+const VIEWS = { overview, videos, search, opps, drafts, composer, publishing, watcher, activity, prompts };
 const NAV = [
   ['Monitor', [['overview', 'Overview', 'dashboard'], ['videos', 'Videos', 'video'], ['search', 'Search', 'search']]],
   ['Content', [['opps', 'Opportunities', 'spark'], ['drafts', 'Review drafts', 'review'], ['composer', 'Reels studio', 'movie'], ['publishing', 'Publishing', 'send']]],
-  ['System', [['watcher', 'Folder watcher', 'folder'], ['activity', 'Activity log', 'history']]],
+  ['System', [['watcher', 'Folder watcher', 'folder'], ['prompts', 'Prompts', 'tune'], ['activity', 'Activity log', 'history']]],
   ['Tools', [['qrstudio', 'QR studio', 'qr_code', 'https://qrstudio.cimage.in/']]],   // external: opens in a new tab
 ];
 

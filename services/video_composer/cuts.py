@@ -244,12 +244,11 @@ class AICutsV1(BaseModel):
     cuts: list[AICut]
 
 
-def load_prompt(version: str) -> tuple[str, str]:
-    """prompts/video-composer/<version>.md -> (system, user). Placeholders are {name}; JSON braces are safe (no str.format)."""
-    text = (PROMPTS_DIR / f"{version}.md").read_text(encoding="utf-8")
-    sections = re.split(r"^## (\w+)\s*$", text, flags=re.MULTILINE)
-    parts = {sections[i].strip(): sections[i + 1].strip() for i in range(1, len(sections) - 1, 2)}
-    return parts["system"], parts["user"]
+def load_prompt(version: str | None = None) -> tuple[str, str]:
+    """prompts/video-composer/cuts_*.md via the registry (active version when None; UI-saved versions win).
+    Placeholders are {name}; JSON braces are safe (no str.format)."""
+    from services import prompts
+    return prompts.prompt("cuts", version)
 
 
 def _fill(template: str, values: dict[str, str]) -> str:

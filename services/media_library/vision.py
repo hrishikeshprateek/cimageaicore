@@ -128,11 +128,10 @@ def contact_sheet(stills: list[tuple[int, float, Path]], out: Path) -> Path:
     return out
 
 
-def load_prompt(version: str = "shots_v1") -> tuple[str, str]:
-    text = (PROMPTS_DIR / f"{version}.md").read_text(encoding="utf-8")
-    sections = re.split(r"^## (\w+)\s*$", text, flags=re.MULTILINE)
-    parts = {sections[i].strip(): sections[i + 1].strip() for i in range(1, len(sections) - 1, 2)}
-    return parts["system"], parts["user"]
+def load_prompt(version: str | None = None) -> tuple[str, str]:
+    """prompts/content-generation/shots_*.md via the registry (active version when None; UI-saved versions win)."""
+    from services import prompts
+    return prompts.prompt("shots", version)
 
 
 def _fill(t: str, values: dict[str, str]) -> str:
@@ -146,7 +145,7 @@ def _fill(t: str, values: dict[str, str]) -> str:
 # --------------------------------------------------------------------------------------------
 
 def index_shots(video: Path, *, duration: float | None, source_name: str, blocks: list, provider, institution_context: str = "",
-                prompt_version: str = "shots_v1", model: str | None = None, max_shots: int = 60, dedupe_distance: int = 6) -> tuple[list[Shot], dict[str, Any]]:
+                prompt_version: str | None = None, model: str | None = None, max_shots: int = 60, dedupe_distance: int = 6) -> tuple[list[Shot], dict[str, Any]]:
     """Detect shots, describe them through the gateway, return usable shots (+ usage/meta). Never raises on the AI side: a failed
     sheet leaves its shots undescribed (quality 'unknown')."""
     times = detect_shots(video, duration=duration, max_shots=max_shots)

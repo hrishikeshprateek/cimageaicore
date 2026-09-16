@@ -73,6 +73,7 @@ const ICONS = {
   auto_awesome: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
   edit_note: '<path d="M4 6h12M4 10h8M4 14h6"/><path d="M14 18l6-6-2-2-6 6v2z"/>',
   rate_review: '<path d="M4 4h16v12H8l-4 4z"/><path d="M8 9l6-1-1 4-4 1z"/>',
+  tune: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   qr_code: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM19 14h2M14 19h2M19 19h2v2"/>',
 };
 // Material Symbols ligature names (Google's own icon set); the inline SVG only shows when the icon font failed to load.
@@ -81,7 +82,7 @@ const SYMBOLS = {
   folder: 'folder', history: 'history', add: 'add', upload: 'upload', link: 'link', check: 'check', close: 'close', edit: 'edit', refresh: 'refresh',
   trash: 'delete', download: 'download', warn: 'warning', info: 'info', chevron: 'chevron_right', open: 'open_in_new', image: 'image', play: 'play_arrow',
   pause: 'pause', bolt: 'bolt', cut: 'content_cut', people: 'group', clock: 'schedule', wallet: 'account_balance_wallet', eye: 'visibility', send: 'send',
-  layers: 'layers', settings: 'settings', brain: 'psychology', grid_view: 'grid_view', hub: 'hub', auto_awesome: 'auto_awesome', edit_note: 'edit_note', rate_review: 'rate_review', qr_code: 'qr_code_2',
+  layers: 'layers', settings: 'settings', brain: 'psychology', grid_view: 'grid_view', hub: 'hub', auto_awesome: 'auto_awesome', edit_note: 'edit_note', rate_review: 'rate_review', qr_code: 'qr_code_2', tune: 'tune',
 };
 export const icon = (name, cls = '') => `<span class="icn"><span class="msym ${cls}" aria-hidden="true">${SYMBOLS[name] || name}</span><svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg></span>`;
 

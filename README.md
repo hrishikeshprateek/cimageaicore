@@ -91,6 +91,15 @@ data/               uploads/, jobs/, analyses/, nas-test/   (git-ignored)
 
 Benchmark any combination with `python scripts/analyze.py <video> --model … --thinking … --resolution … --fps …`.
 
+## Prompts (editable in the UI)
+
+Every prompt the platform sends to a model is a versioned Markdown file (`## system` / `## user` + `{placeholders}`):
+video analysis `v1`/`v2`, people pass, blog writer, shot picker, reel cuts, plus the style guide and the known-people
+roster. `/admin → Prompts` reads them all, lets you save an edit as a **new version** (bundled files are never changed —
+custom versions go to `data/prompts/…` on the data volume), switch the active version per kind and edit the institution
+context; changes apply live via `services/prompts/registry.py` (the engine and the writer reload their templates).
+`.env` values (`PROMPT_VERSION`, `BLOG_PROMPT_VERSION`, …) remain the defaults; `data/prompt_config.json` holds overrides.
+
 ## Upload proxies (raw camera files)
 
 Gemini charges per **second** of video (~1 frame/s sampled + audio), never per byte — a 21 GB ProRes master and a 200 MB

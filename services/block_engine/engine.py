@@ -14,6 +14,7 @@ from services.block_engine.media import ts_to_seconds
 from services.block_engine.proxy import ProxyPolicy, make_proxy, probe, proxy_reason
 from services.block_engine.schemas import AnalysisResult, PeoplePassV1, PersonBlock, UsageInfo, VideoAnalysisV1, normalise_timestamps, provider_json_schema
 from services.block_engine.sources import VideoSource
+from services import prompts
 
 log = logging.getLogger(__name__)
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
@@ -24,16 +25,18 @@ class BlockValidationError(RuntimeError):
 
 
 def load_prompt(version: str) -> tuple[str, str]:
-    """Read prompts/video-analysis/<version>.md -> (system, user) templates."""
-    text = (PROMPTS_DIR / "video-analysis" / f"{version}.md").read_text(encoding="utf-8")
-    sections = re.split(r"^## (\w+)\s*$", text, flags=re.MULTILINE)
-    parts = {sections[i].strip(): sections[i + 1].strip() for i in range(1, len(sections) - 1, 2)}
-    return parts["system"], parts["user"]
+    """prompts/video-analysis/<version>.md -> (system, user); UI-saved versions (data/prompts) win over bundled ones."""
+    kind = "people-pass" if version.startswith("people_") else "video-analysis"
+    return prompts.prompt(kind, version)
 
 
 def load_known_people(path: Path | None) -> str:
-    """prompts/known_people.txt -> bullet list for the prompt ('none listed' when absent/empty)."""
-    if path is None or not path.exists():
+    """Roster -> bullet list for the prompt ('none listed' when absent/empty). The registry's (UI-edited) roster wins."""
+    if path is not None and path.exists():
+        pass                                     # an explicit file wins (tests, scripts)
+    elif prompts.CURRENT is not None:
+        return prompts.CURRENT.known_people()    # the app: bundled roster or the UI-edited overlay
+    else:
         return "- none listed"
     names = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")]
     return "\n".join(f"- {n}" for n in names) or "- none listed"
@@ -66,6 +69,7 @@ class BlockEngine:
         self.retry_on_coarse_transcript = retry_on_coarse_transcript
         self.prompt_version = prompt_version
         self.institution_context = institution_context
+        self.known_people_file = known_people_file
         self.known_people = load_known_people(known_people_file)
         self.system_template, self.user_template = load_prompt(prompt_version)
         self.json_schema = provider_json_schema(VideoAnalysisV1)
@@ -73,6 +77,19 @@ class BlockEngine:
         if people_pass_version:
             self.people_system, self.people_user = load_prompt(people_pass_version)
             self.people_schema = provider_json_schema(PeoplePassV1)
+
+    def reload(self, registry) -> None:
+        """Pick up the registry's active prompt versions, institution context and roster - called when they change in the UI."""
+        self.prompt_version = registry.active("video-analysis")
+        self.institution_context = registry.institution_context
+        self.known_people = registry.known_people()
+        self.system_template, self.user_template = registry.prompt("video-analysis")
+        pv = registry.active("people-pass") if self.people_pass_version else None
+        self.people_pass_version = pv
+        if pv:
+            self.people_system, self.people_user = registry.prompt("people-pass")
+            self.people_schema = provider_json_schema(PeoplePassV1)
+        log.info("prompts reloaded: analysis=%s people=%s", self.prompt_version, self.people_pass_version)
 
     def analyze(self, job_id: str, source: VideoSource, on_stage: StageCallback) -> AnalysisResult:
         started = time.monotonic()
