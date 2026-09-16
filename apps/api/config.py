@@ -116,6 +116,8 @@ class Settings(BaseSettings):
             roots.append((p if p.is_absolute() else REPO_ROOT / p).resolve())
         return roots
 
+    nas_browse_anywhere: bool = True   # folder picker may browse the whole filesystem (off = only NAS mounts + configured roots)
+
     @property
     def watcher_config_file(self) -> Path:
         return self.data_dir / "watcher_config.json"

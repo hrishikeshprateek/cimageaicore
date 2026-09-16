@@ -38,6 +38,7 @@ def test_pick_folder_from_the_ui_and_watcher_picks_up_a_video(app_env, tiny_vide
     monkeypatch.setenv("WATCHER_ENABLED", "true")
     monkeypatch.setenv("WATCHER_INTERVAL_SECONDS", "3600")   # we trigger scans by hand
     monkeypatch.setenv("WATCHER_STABLE_SECONDS", "0")
+    monkeypatch.setenv("NAS_BROWSE_ANYWHERE", "false")       # restricted mode: only NAS mounts + configured roots
     from apps.api import config
 
     config.get_settings.cache_clear()
@@ -85,3 +86,31 @@ def test_pick_folder_from_the_ui_and_watcher_picks_up_a_video(app_env, tiny_vide
         client.put("/api/v1/nas/roots", json={"roots": [str(drop)]})
     with TestClient(create_app()) as client:
         assert str(drop) in client.get("/api/v1/watcher").json()["roots"]
+
+
+def test_picker_browses_the_whole_filesystem_by_default(app_env, tmp_path: Path, monkeypatch):
+    """NAS_BROWSE_ANYWHERE (default true): Home / Desktop / mounted drives / the whole system are starting points, any folder
+    can be opened and chosen, / is the top, and OS internals are hidden when listing /."""
+    monkeypatch.setenv("WATCHER_ENABLED", "true")
+    monkeypatch.setenv("WATCHER_INTERVAL_SECONDS", "3600")
+    from apps.api import config
+
+    config.get_settings.cache_clear()
+    from fastapi.testclient import TestClient
+    from apps.api.main import create_app
+
+    footage = tmp_path / "somewhere else" / "Camera Cards"; footage.mkdir(parents=True)
+    with TestClient(create_app()) as client:
+        r = client.get("/api/v1/nas/roots").json()
+        assert r["browse_anywhere"] is True and any(p["label"].startswith("Home") for p in r["places"]) and all(p["path"] != "/" for p in r["places"])
+        top = client.get("/api/v1/nas/browse").json()
+        names = [f["name"] for f in top["folders"]]
+        assert any(n.startswith("Home") for n in names) and names[-1].startswith("Whole system") and top["folders"][-1]["path"] == "/"
+        root = client.get("/api/v1/nas/browse", params={"path": "/"}).json()
+        assert root["parent"] is None and not ({"etc", "usr", "bin", "proc", "System"} & {f["name"] for f in root["folders"]})
+        lst = client.get("/api/v1/nas/browse", params={"path": str(tmp_path / "somewhere else")}).json()
+        assert [f["name"] for f in lst["folders"]] == ["Camera Cards"] and lst["parent"] == str(tmp_path)   # can climb, all the way up
+        assert client.get("/api/v1/nas/browse", params={"path": str(tmp_path / "missing")}).status_code == 404
+        r = client.put("/api/v1/nas/roots", json={"roots": [str(footage)]}).json()
+        assert any(x["path"] == str(footage) and x["source"] == "ui" for x in r["roots"])
+        assert client.put("/api/v1/nas/roots", json={"roots": ["relative/path"]}).status_code == 400

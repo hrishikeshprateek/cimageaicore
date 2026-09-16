@@ -40,12 +40,20 @@ def save_config(path: Path, cfg: WatcherConfig) -> None:
 
 # ------------------------------------------------------------------ places the picker may browse
 _PLACE_CANDIDATES = ("/nas", "/mnt", "/media", "/home", "/srv", "/Volumes", "/data")
+ANYWHERE = Path("/")
+# OS internals hidden when browsing from / - nobody keeps footage there and listing them is slow
+_ROOT_NOISE = {"bin", "sbin", "usr", "etc", "var", "dev", "proc", "sys", "run", "boot", "lib", "lib32", "lib64", "libx32", "snap", "lost+found",
+               "cores", "private", "System", "Library", "Applications", "opt"}
 
 
-def places(extra: list[Path]) -> list[Path]:
-    """Top-level folders the picker can start from: mounted NAS locations + configured roots. Only what exists."""
+def places(extra: list[Path], *, anywhere: bool = True) -> list[Path]:
+    """Starting points for the picker: home + Desktop/Downloads, mounted drives / NAS mounts, configured roots and -
+    when `anywhere` (NAS_BROWSE_ANYWHERE, the default) - the whole filesystem. Only folders that exist."""
+    home = Path.home()
+    starts = [home, home / "Desktop", home / "Downloads", home / "Movies", home / "Videos"] if anywhere else []
+    candidates = [str(p) for p in starts] + list(_PLACE_CANDIDATES) + [str(p) for p in extra] + (["/"] if anywhere else [])
     out: list[Path] = []
-    for raw in list(_PLACE_CANDIDATES) + [str(p) for p in extra]:
+    for raw in candidates:
         p = Path(raw)
         try:
             if p.is_dir() and p.resolve() not in [o.resolve() for o in out]:
@@ -55,12 +63,33 @@ def places(extra: list[Path]) -> list[Path]:
     return out
 
 
+def place_label(p: Path) -> str:
+    """Human name for a starting point ("Home", "Desktop", "Whole system", or the path itself)."""
+    home = Path.home()
+    if p == ANYWHERE:
+        return "Whole system  /"
+    if p == home:
+        return f"Home  {home}"
+    if p.parent == home and p.name in ("Desktop", "Downloads", "Movies", "Videos"):
+        return f"{p.name}  {p}"
+    if str(p) == "/Volumes":
+        return "Mounted drives  /Volumes"
+    if str(p) in ("/mnt", "/media"):
+        return f"Mounts  {p}"
+    if str(p) == "/nas":
+        return "NAS  /nas"
+    return str(p)
+
+
 def is_browsable(path: Path, allowed: list[Path]) -> bool:
-    """A folder inside one of the places (the picker never wanders into /etc or the code)."""
+    """A folder inside one of the places. With the whole filesystem as a place (NAS_BROWSE_ANYWHERE) everything qualifies;
+    the listing still hides dot-folders and system internals, and the watcher only ever *reads* what it is pointed at."""
     try:
         r = path.resolve()
     except OSError:
         return False
+    if any(base == ANYWHERE for base in allowed):
+        return True
     for base in allowed:
         try:
             b = base.resolve()
@@ -100,8 +129,9 @@ def list_dir(path: Path, *, max_entries: int = 500) -> dict[str, Any]:
         entries = sorted(path.iterdir(), key=lambda e: e.name.lower())
     except OSError as exc:
         return {"path": str(path), "error": str(exc), "folders": [], "videos": []}
+    at_root = path.resolve() == ANYWHERE
     for entry in entries[:max_entries]:
-        if entry.name.startswith("."):
+        if entry.name.startswith(".") or (at_root and entry.name in _ROOT_NOISE):
             continue
         try:
             if entry.is_dir():

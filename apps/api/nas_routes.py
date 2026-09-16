@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from services.ingestion.config import WatcherConfig, folder_status, is_browsable, list_dir, load_config, places, save_config
+from services.ingestion.config import ANYWHERE, WatcherConfig, folder_status, is_browsable, list_dir, load_config, place_label, places, save_config
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/nas", tags=["nas"])
@@ -28,7 +28,7 @@ def _env_roots(request: Request) -> list[Path]:
 def _browsable_bases(request: Request) -> list[Path]:
     s = request.app.state.settings
     w = _watcher(request)
-    return places(list(s.allowed_roots) + list(w.roots) + _env_roots(request))
+    return places(list(s.allowed_roots) + list(w.roots) + _env_roots(request), anywhere=s.nas_browse_anywhere)
 
 
 @router.get("/roots")
@@ -45,7 +45,8 @@ def roots(request: Request) -> dict[str, Any]:
     in_docker = Path("/.dockerenv").exists()
     return {
         "roots": out,
-        "places": [folder_status(p) for p in _browsable_bases(request)],
+        "places": [{**folder_status(p), "label": place_label(p)} for p in _browsable_bases(request) if p != ANYWHERE],
+        "browse_anywhere": s.nas_browse_anywhere,
         "docker": in_docker,
         "hint": ("Inside Docker the NAS folder from NAS_WATCH_DIR appears as /nas. Other folders must be mounted into the container to be visible here."
                  if in_docker else "Connect the NAS in Finder / mount it on this machine, then pick the folder here."),
@@ -84,14 +85,14 @@ def browse(request: Request, path: str | None = None) -> dict[str, Any]:
     """Folder picker: sub-folders (with video counts) and videos of `path`; without a path, the places to start from."""
     bases = _browsable_bases(request)
     if not path:
-        return {"path": None, "parent": None, "folders": [{"name": str(b), "path": str(b), "videos": folder_status(b)["videos"]} for b in bases], "videos": [], "places": True}
+        return {"path": None, "parent": None, "folders": [{"name": place_label(b), "path": str(b), "videos": folder_status(b)["videos"] if b != ANYWHERE else 0} for b in bases], "videos": [], "places": True}
     p = Path(path).expanduser()
     if not is_browsable(p, bases):
         raise HTTPException(400, f"{p} is outside the browsable locations")
     if not p.is_dir():
         raise HTTPException(404, f"folder not found: {p}")
     out = list_dir(p)
-    if not is_browsable(Path(out.get("parent") or p), bases):
-        out["parent"] = None   # stop at the top of the place
+    if p.resolve() == ANYWHERE or not is_browsable(Path(out.get("parent") or p), bases):
+        out["parent"] = None   # stop at the top of the place (or at / when browsing anywhere)
     out["places"] = False
     return out
