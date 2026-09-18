@@ -74,7 +74,7 @@ main{min-width:0;display:flex;flex-direction:column}
 .searchbar kbd{opacity:.8}.searchbar:focus-within kbd{display:none}
 .status-pill{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:16px;background:var(--g-grey-100);color:var(--ink-2);font-size:13px;font-weight:500;white-space:nowrap}
 .status-pill b{color:var(--ink);font-weight:500}.status-pill .dot{margin:0}
-.page{padding:8px 24px 72px;max-width:1560px;width:100%}.page.enter{animation:fadein .18s ease-out}
+.page{padding:8px 24px 72px;width:100%}.page.enter{animation:fadein .18s ease-out}
 @keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 html{scroll-behavior:smooth}
 .page-head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin:16px 0 20px}.page-head .sp{flex:1}
@@ -346,3 +346,29 @@ img,video,canvas{max-width:100%}
 @media(max-width:420px){.kpis{grid-template-columns:1fr 1fr}.kpi .l{font-size:12px}.flow{grid-template-columns:repeat(4,minmax(0,1fr))}.node .lbl,.node .s{font-size:10px}.nav a.item{flex-basis:62px}}
 @media(pointer:coarse){.btn.xs{min-height:36px;padding:0 12px}.btn{min-height:40px}.li.clickable{min-height:56px}.chip{min-height:36px}.tab{min-height:44px}.nav a.item{min-height:52px}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- large displays (32" QHD, 48" 4K, wall screens): the page has no width cap - it fills the screen - and the extra
+   room becomes more columns and slightly larger figures rather than one stretched column. ---------- */
+@media(min-width:1800px){
+  :root{--nav-w:272px}
+  .page{padding:12px 32px 80px}.page-head{margin:20px 0 24px}
+  .topbar{padding:0 32px}.topbar .sub{max-width:480px}.searchbar{width:min(720px,32vw)}
+  .kpis{gap:20px}.kpi{padding:20px 24px 22px}.kpi .v{font-size:40px;line-height:48px}
+  .g2,.g3{gap:24px}.gauto{grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:20px}.pics{grid-template-columns:repeat(auto-fill,minmax(240px,1fr))}
+  .review{grid-template-columns:440px minmax(0,1fr);gap:24px}.studio{grid-template-columns:340px minmax(0,1fr) 400px;gap:24px}
+  .article{max-width:900px;margin:0 auto}
+  .node .ring{width:68px;height:68px}.node .cnt{font-size:30px;line-height:36px}.node .lbl{font-size:14px}.node .sub{font-size:12.5px}
+  .funnel .fseg .v{font-size:24px;line-height:30px}
+}
+@media(min-width:2200px){
+  :root{--nav-w:288px}
+  .page{padding:16px 40px 88px}.topbar{padding:0 40px}
+  .kpis{gap:24px}.kpi .l{font-size:15px}.kpi .v{font-size:44px;line-height:52px}.kpi .s{font-size:13px;line-height:18px}
+  /* the overview's two stacks (attention + recent | watcher + activity) become four columns side by side */
+  .g2:has(>.stack+.stack){grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,1fr) minmax(0,1fr)}.g2:has(>.stack+.stack)>.stack{display:contents}
+  .g2:has(>.stack+.stack) .tw .ellipsis{max-width:min(340px,10vw)!important}
+  .gauto{grid-template-columns:repeat(auto-fill,minmax(420px,1fr))}.pics{grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+  .review{grid-template-columns:480px minmax(0,1fr)}.studio{grid-template-columns:380px minmax(0,1fr) 440px}
+}
+/* 4K at 100% OS scaling (a 43-48" TV as a wall dashboard) is legible only with OS display scaling (150%) or browser zoom
+   (Ctrl +, remembered per site) - both keep 100vh/pointer maths correct, which CSS `zoom` does not. */
