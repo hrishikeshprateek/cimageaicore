@@ -35,6 +35,14 @@ Mount the college NAS read-only (one line in `/etc/fstab`; `nofail` so a NAS out
 folder you put in `NAS_WATCH_DIR` (e.g. `NAS_WATCH_DIR="/mnt/nas/Cimage AI Agent"`), never the whole NAS — that folder is
 mounted at `/nas` inside the container.
 
+**Mount the NAS under `/mnt` or `/media`.** The API runs in a container, and a container only sees what is mounted into it —
+not the server's disks. The compose file therefore mounts the host's `/mnt` and `/media` read-only under the same paths
+(with mount propagation, so a share mounted *after* the stack started still appears). Anything under them shows up in the
+admin folder picker (*Folder watcher → Pick a folder → Host mounts /mnt*), where you can add more folders to watch without
+touching `.env`. A NAS mounted anywhere else (say `/home/cimage/nas`) is invisible to the picker until you add a volume line
+to `docker-compose.yml` (`- /home/cimage/nas:/home/cimage/nas:ro`) and run `docker compose up -d`.
+`docker compose exec api ls /mnt` shows exactly what the container can see.
+
 ## 2. One-shot install (recommended)
 
 On a fresh Ubuntu/Debian box, as a user with sudo:
@@ -139,6 +147,7 @@ brings the stack back on its own; only `docker compose stop` keeps it down.
 | See what's happening | `/admin` → Overview (pipeline strip, spend, what needs a decision) and Folder watcher (files seen, queued, duplicates, errors, per-file result, pause / scan now / re-scan). |
 | Review an article | `/admin` → Review drafts → read → **Approve** / Needs changes / Reject, or Edit (saves a new version). Every decision lands in the Activity log. |
 | Re-analyse a file that was replaced | Folder watcher → *re-scan* next to the file (or drop it under a new name). |
+| Watch another folder | Folder watcher → *Pick a folder…* → *Host mounts /mnt* (or */media*) → choose it. Picked folders are saved in `data/watcher_config.json`; `.env` folders stay. The picker cannot show a folder the container has no mount for — see §1. |
 | Watch logs | `docker compose logs -f api` |
 | Update the app | bump the tag in `docker-compose.yml`, then `docker compose pull && docker compose up -d` (migrations run on startup); or `docker compose up -d --build` when building from source |
 | Backup | `docker compose exec postgres pg_dump -U cimage cimage_ai > backup.sql` plus the `./data` folder (uploads, renders, images) |

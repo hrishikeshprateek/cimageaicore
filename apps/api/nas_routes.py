@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from services.ingestion.config import ANYWHERE, WatcherConfig, folder_status, is_browsable, list_dir, load_config, place_label, places, save_config
+from services.ingestion.config import IN_DOCKER, ANYWHERE, WatcherConfig, folder_status, is_browsable, list_dir, load_config, place_label, places, save_config
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/nas", tags=["nas"])
@@ -42,14 +42,15 @@ def roots(request: Request) -> dict[str, Any]:
         st = folder_status(Path(r))
         st["source"] = "env" if str(r) in env else "ui"
         out.append(st)
-    in_docker = Path("/.dockerenv").exists()
     return {
         "roots": out,
         "places": [{**folder_status(p), "label": place_label(p)} for p in _browsable_bases(request) if p != ANYWHERE],
         "browse_anywhere": s.nas_browse_anywhere,
-        "docker": in_docker,
-        "hint": ("Inside Docker the NAS folder from NAS_WATCH_DIR appears as /nas. Other folders must be mounted into the container to be visible here."
-                 if in_docker else "Connect the NAS in Finder / mount it on this machine, then pick the folder here."),
+        "docker": IN_DOCKER,
+        "hint": ("Running in Docker: the picker sees the container, not the server. NAS_WATCH_DIR is at /nas; the server's /mnt and /media are "
+                 "visible under the same paths, so mount the NAS anywhere under /mnt or /media (e.g. /mnt/nas) and pick it here. "
+                 "A folder elsewhere on the server needs its own volume line in docker-compose.yml."
+                 if IN_DOCKER else "Connect the NAS in Finder / mount it on this machine, then pick the folder here."),
         "config_file": str(s.watcher_config_file),
         "enabled": w.enabled, "running": w.status().running,
     }
@@ -85,7 +86,11 @@ def browse(request: Request, path: str | None = None) -> dict[str, Any]:
     """Folder picker: sub-folders (with video counts) and videos of `path`; without a path, the places to start from."""
     bases = _browsable_bases(request)
     if not path:
-        return {"path": None, "parent": None, "folders": [{"name": place_label(b), "path": str(b), "videos": folder_status(b)["videos"] if b != ANYWHERE else 0} for b in bases], "videos": [], "places": True}
+        top = []
+        for b in bases:
+            st = folder_status(b) if b != ANYWHERE else {}
+            top.append({"name": place_label(b), "path": str(b), "videos": st.get("videos", 0), "folders": st.get("folders", 0), "mounted": st.get("mounted")})
+        return {"path": None, "parent": None, "folders": top, "videos": [], "places": True, "docker": IN_DOCKER}
     p = Path(path).expanduser()
     if not is_browsable(p, bases):
         raise HTTPException(400, f"{p} is outside the browsable locations")

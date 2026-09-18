@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from services.ingestion.config import WatcherConfig, folder_status, is_browsable, list_dir, load_config, places, save_config
+from services.ingestion.config import WatcherConfig, folder_status, is_browsable, list_dir, load_config, place_label, places, save_config
 
 
 def test_config_roundtrip_and_browse_helpers(tmp_path: Path, tiny_video: Path):
@@ -114,3 +114,24 @@ def test_picker_browses_the_whole_filesystem_by_default(app_env, tmp_path: Path,
         r = client.put("/api/v1/nas/roots", json={"roots": [str(footage)]}).json()
         assert any(x["path"] == str(footage) and x["source"] == "ui" for x in r["roots"])
         assert client.put("/api/v1/nas/roots", json={"roots": ["relative/path"]}).status_code == 400
+
+
+
+def test_places_inside_docker_are_the_mounted_host_folders(tmp_path: Path):
+    """In the api container the filesystem is the image's: the container's home is nobody's Desktop, the image's empty /home
+    and /srv are noise, /data is the app's own volume - the places are /nas + the host's /mnt and /media (mounted by compose,
+    listed even while empty so it is obvious where the share must go), configured roots and the container root."""
+    home = Path.home()
+    ps = places([tmp_path], anywhere=True, in_docker=True)
+    assert home not in ps and home / "Desktop" not in ps and home / "Downloads" not in ps
+    assert Path("/data") not in ps and tmp_path in ps and ps[-1] == Path("/")
+    for raw in ("/home", "/srv"):
+        p = Path(raw)
+        if p.is_dir() and next(p.iterdir(), None) is None:   # empty on this machine -> hidden in docker mode, shown otherwise
+            assert p not in ps and p in places([], anywhere=True, in_docker=False)
+    assert place_label(Path("/mnt"), in_docker=True) == "Host mounts  /mnt" and place_label(Path("/mnt"), in_docker=False) == "Mounts  /mnt"
+    assert place_label(Path("/"), in_docker=True).startswith("Container filesystem") and place_label(Path("/"), in_docker=False).startswith("Whole system")
+    assert place_label(Path("/nas"), in_docker=True).startswith("NAS")
+    # outside docker nothing changes: home and the whole system are starting points
+    outside = places([], anywhere=True, in_docker=False)
+    assert home in outside and outside[-1] == Path("/")

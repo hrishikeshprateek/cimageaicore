@@ -28,6 +28,20 @@ services:
     volumes:
       - ./data:/data
       - ${NAS_WATCH_DIR:-./data/nas-test/AI-Test}:/nas:ro   # the NAS drop folder (read-only), e.g. NAS_WATCH_DIR="/mnt/nas/Cimage AI Agent" in .env on the server
+      # The host's mount points, read-only and under the SAME paths inside, so the admin folder picker (Folder watcher -> Pick a
+      # folder) can browse a NAS mounted anywhere under /mnt or /media - a container only sees what is mounted into it.
+      # rslave: a share mounted on the host *after* the container started still appears inside. Any other host folder needs
+      # its own line here (`- /srv/footage:/srv/footage:ro`). macOS Docker Desktop has no /mnt: see HOST_MOUNTS_* in .env.example.
+      - type: bind
+        source: ${HOST_MOUNTS_DIR:-/mnt}
+        target: ${HOST_MOUNTS_DIR:-/mnt}
+        read_only: true
+        bind: { propagation: "${HOST_MOUNTS_PROPAGATION:-rslave}", create_host_path: true }
+      - type: bind
+        source: ${HOST_MEDIA_DIR:-/media}
+        target: ${HOST_MEDIA_DIR:-/media}
+        read_only: true
+        bind: { propagation: "${HOST_MOUNTS_PROPAGATION:-rslave}", create_host_path: true }
     depends_on:
       postgres: { condition: service_healthy }   # never start against a half-initialised database (the API would fall back to JSON files)
       redis: { condition: service_healthy }
