@@ -126,8 +126,10 @@ class MockProvider:
         return RawModelOutput(text=json.dumps(out), model=model or self.model, usage={"input_tokens": 0, "output_tokens": 0, "thought_tokens": 0, "total_tokens": 0})
 
     def generate_structured(self, system_instruction: str, prompt: str, json_schema: dict[str, Any], *, model: str | None = None, thinking_level: str | None = None) -> RawModelOutput:
-        """Canned blog draft that cites the evidence ids it finds in the prompt ([id=...])."""
+        """Canned draft that cites the evidence ids it finds in the prompt ([id=...]). A script schema gets a canned script."""
         ids = [i for i in re.findall(r"\[id=([^\]]+)\]", prompt) if ":" in i]  # real block ids look like job:type:n
+        if "scenes" in (json_schema.get("properties") or {}):
+            return self._script(prompt, ids, model)
         brief = re.search(r"BRIEF:\s*(.+)", prompt)
         title = (brief.group(1).strip() if brief else "Untitled").splitlines()[0][:80]
         draft = {
@@ -144,3 +146,28 @@ class MockProvider:
             "evidence_gaps": ["mock provider: no real evidence considered"],
         }
         return RawModelOutput(text=json.dumps(draft), model=model or self.model, usage={"input_tokens": 0, "output_tokens": 0, "thought_tokens": 0, "total_tokens": 0})
+
+    def _script(self, prompt: str, ids: list[str], model: str | None) -> RawModelOutput:
+        """Canned video script: the right number of scenes for the asked length, reusing the evidence and pictures offered."""
+        seconds = int((re.search(r"this is a (\d+) second video", prompt, re.I) or re.search(r"(\d+) seconds", prompt) or [0, 45])[1])
+        want = int((re.search(r"roughly (\d+) scenes", prompt) or [0, 3])[1]) or 3
+        pics = re.findall(r"\[img=([^\]]+)\]", prompt)
+        idea = (re.search(r"IDEA[^:]*:\n(.+)", prompt) or [None, "a video"])[1].strip()[:70]
+        per = round(seconds / want, 1)
+        scenes = [{
+            "n": i + 1, "seconds": per,
+            "visual": f"[MOCK] shot {i + 1} for: {idea}",
+            "voiceover": " ".join(["mock"] * 6) if i else f"[MOCK] {idea}?",
+            "on_screen_text": None if i else "MOCK",
+            "b_roll_block_id": ids[i] if i < len(ids) else None,
+            "b_roll_image_id": pics[i] if i < len(pics) else None,
+            "evidence_ids": ids[i: i + 1],
+        } for i in range(want)]
+        script = {
+            "title": f"[MOCK] {idea}", "language": "hi", "hook": f"[MOCK] {idea}?", "scenes": scenes,
+            "cta": "[MOCK] visit the campus", "caption": "[MOCK] caption", "hashtags": ["CIMAGE", "mock"],
+            "thumbnail_idea": "[MOCK] thumbnail", "music_mood": "upbeat",
+            "shot_list": ["[MOCK] one shot that must still be filmed"],
+            "evidence_gaps": ["mock provider: no real evidence considered"],
+        }
+        return RawModelOutput(text=json.dumps(script), model=model or self.model, usage={"input_tokens": 0, "output_tokens": 0, "thought_tokens": 0, "total_tokens": 0})

@@ -42,6 +42,7 @@ const ICONS = {
   movie: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 4v5M16 4v5M8 15l4 2.5V12.5z" />',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   dns: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5M12 7v5l3 2"/>',
   add: '<path d="M12 5v14M5 12h14"/>',
   upload: '<path d="M12 16V4M6 10l6-6 6 6"/><path d="M4 20h16"/>',
@@ -83,7 +84,7 @@ const SYMBOLS = {
   folder: 'folder', history: 'history', add: 'add', upload: 'upload', link: 'link', check: 'check', close: 'close', edit: 'edit', refresh: 'refresh',
   trash: 'delete', download: 'download', warn: 'warning', info: 'info', chevron: 'chevron_right', open: 'open_in_new', image: 'image', play: 'play_arrow',
   pause: 'pause', bolt: 'bolt', cut: 'content_cut', people: 'group', clock: 'schedule', wallet: 'account_balance_wallet', eye: 'visibility', send: 'send',
-  layers: 'layers', settings: 'settings', brain: 'psychology', grid_view: 'grid_view', hub: 'hub', auto_awesome: 'auto_awesome', edit_note: 'edit_note', rate_review: 'rate_review', qr_code: 'qr_code_2', tune: 'tune', dns: 'dns',
+  layers: 'layers', settings: 'settings', brain: 'psychology', grid_view: 'grid_view', hub: 'hub', auto_awesome: 'auto_awesome', edit_note: 'edit_note', rate_review: 'rate_review', qr_code: 'qr_code_2', tune: 'tune', dns: 'dns', mic: 'mic',
 };
 export const icon = (name, cls = '') => `<span class="icn"><span class="msym ${cls}" aria-hidden="true">${SYMBOLS[name] || name}</span><svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg></span>`;
 

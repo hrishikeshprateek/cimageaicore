@@ -48,6 +48,8 @@ KINDS: dict[str, Kind] = {k.key: k for k in (
          ("institution_context", "known_people", "source_name")),
     Kind("blog", "Blog writer", "content-generation", "blog_", "blog_v2", "articles drafted from the knowledge base (Blog Agent)",
          ("institution_context", "style_guide", "brief", "evidence", "target_words", "formats", "images")),
+    Kind("script", "Script writer", "content-generation", "script_", "script_v1", "video scripts written from an idea + the knowledge base (Script Agent)",
+         ("institution_context", "idea", "language", "language_rules", "style_instructions", "seconds", "target_words", "scene_count", "scene_seconds", "evidence", "images")),
     Kind("shots", "Shot picker", "content-generation", "shots_", "shots_v1", "describing stills cut from a video for article pictures",
          ("institution_context",)),
     Kind("cuts", "Reel cuts", "video-composer", "cuts_", "cuts_v1", "asking Gemini for better reel windows in the studio",

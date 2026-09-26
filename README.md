@@ -40,6 +40,8 @@ clearly labelled `[MOCK]`) so the pipeline can be exercised offline.
 | `GET` | `/api/v1/search?q=…&mode=hybrid\|keyword\|vector&block_type=&media_id=` | hybrid search: Postgres full-text + pgvector cosine, reciprocal-rank fused; each hit says what matched it |
 | `GET` | `/api/v1/system` | provider/model/store/config in use |
 | `GET/POST` | `/api/v1/opportunities`, `…/{id}/status` | content-opportunity queue (AI-proposed per video, or manual); accept / dismiss |
+| `POST/GET` | `/api/v1/scripts`, `…/{id}`, `…/{id}/regenerate`, `…/{id}/status`, `…/{id}/export` | Script Writer: idea (typed or dictated) → timed scenes; edit, rewrite, approve, download |
+| `GET` | `/api/v1/script-options` | languages, styles, lengths (with word budgets) and the dictation provider |
 | `POST` | `/api/v1/drafts` | `{opportunity_id}` or `{brief}` (+ `job_id`, `depth`, `include_images`) → Blog Agent runs in the background (202) |
 | `PUT` | `/api/v1/drafts/{id}/images` | editor sets the hero / inline pictures (new version) |
 | `POST/GET` | `/api/v1/jobs/{id}/frames` · `/api/v1/images?job_id=&kind=` · `/api/v1/images/{id}` | frames from a video, image list, image file |
@@ -146,6 +148,38 @@ Table `images`, files in `data/images/`. Campus-tour video: 33 shots indexed in 
 the video's frames and the library, with Hero / Insert / Remove and a captions editor; `body_markdown_clean` renders the
 figures as Markdown images. Picture ids written as `[id=…]` citations are scrubbed rather than counted as bad citations. Live run on the campus-tour video after
 indexing: 7 sections incl. takeaways + FAQ, 1,240 words, 21 citations, hero + 5 verified stills with accurate captions, 12k tokens.
+
+## Script Writer (V1.1)
+
+Say or type an idea — in Hindi, English or a mix — and get a **timed, shootable video script** built from the same
+knowledge base the blog writer uses. `/admin#scripts`.
+
+```
+mic (Chrome speech API, hi-IN) ─┐
+                                ├─▶ idea ─▶ Retriever (pgvector over our own videos) ─▶ Gemini (script_v1) ─▶ scenes
+typed idea ─────────────────────┘                                                                              │
+                              teleprompter · b-roll picks · approve  ◀── /admin#scripts review ◀───────────────┘
+```
+
+`POST /api/v1/scripts {idea, language: hi|en|hinglish, seconds, style, job_id?, spoken}` → `202` and the page polls.
+The agent retrieves up to 60 blocks, then writes strict JSON: title, **hook** (the first three seconds), scenes
+(`seconds`, `visual`, `voiceover`, `on_screen_text`, `b_roll_block_id`, `b_roll_image_id`, `evidence_ids`), CTA, caption,
+hashtags, thumbnail idea, music mood, a shot list of what still has to be filmed and the evidence gaps.
+
+**Length is a budget, not a hope**: seconds × speaking rate (Hindi 2.1 w/s, Hinglish 2.3, English 2.5) sets the word
+count and `scene_plan()` the number of scenes; afterwards the agent *checks* that the scenes add up to the length asked
+for, that the voiceover fits, that the hook is short, that every id exists (ids the model copies as `[id=…]` markers are
+normalised) and — for Hindi — that the voiceover really is Devanagari. Anything off becomes a warning on the script, never
+a silent pass. Styles: viral reel · testimonial · campus tour · explainer · announcement · ad.
+
+The page: one idea box with a **mic** (`STT_PROVIDER=browser`, `STT_LANGUAGE=hi-IN`; a local Whisper endpoint can replace
+it without touching the UI), language / length / style / footage chips, then a scene timeline you can edit — swap a
+scene's picture with the shared picker (stills · library · **upload from this computer**), reorder, add or delete scenes,
+rewrite at a different length or language, and a **teleprompter** that scrolls the voiceover in exactly the length of the
+video (space = start/stop, A± = size). Approve / reject like drafts; every edit keeps the previous version
+(`scripts`, `script_versions`), and `GET /api/v1/scripts/{id}/export?format=md|txt` downloads the shooting script or the
+plain voiceover. The prompt is `script_v1` in the registry, so the viral formula is tunable from **Prompts**.
+Live 30 s Hindi reel from the CIMAGE library: 5 scenes, 65 words, all Devanagari, 4 cited blocks, 5 real stills, ₹0.3.
 
 ## Folder watcher + auto-draft + admin panel (V0.4 / V0.6 / V0.8)
 

@@ -125,7 +125,7 @@ def pg_app(test_db_url, tmp_path, monkeypatch):  # noqa: F811
     config.get_settings.cache_clear()
     import psycopg
     with psycopg.connect(test_db_url, autocommit=True) as conn:
-        conn.execute("TRUNCATE audit_log, knowledge_blocks, processing_jobs, media, content_opportunities, drafts, draft_versions, agent_runs CASCADE")
+        conn.execute("TRUNCATE audit_log, knowledge_blocks, processing_jobs, media, content_opportunities, drafts, draft_versions, agent_runs, scripts, script_versions CASCADE")
 
 
 def test_end_to_end_video_to_reviewed_draft(pg_app, tiny_video):
@@ -220,4 +220,4 @@ def test_auto_draft_turns_the_best_opportunity_into_a_review_draft(test_db_url, 
     finally:
         config.get_settings.cache_clear()
         with psycopg.connect(test_db_url, autocommit=True) as conn:
-            conn.execute("TRUNCATE audit_log, knowledge_blocks, processing_jobs, media, content_opportunities, drafts, draft_versions, agent_runs CASCADE")
+            conn.execute("TRUNCATE audit_log, knowledge_blocks, processing_jobs, media, content_opportunities, drafts, draft_versions, agent_runs, scripts, script_versions CASCADE")

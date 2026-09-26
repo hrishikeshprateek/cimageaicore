@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "CIMAGE AI Media Platform"
-    app_version: str = "0.9.2"
+    app_version: str = "0.10.0"
     app_git_sha: str = "dev"          # stamped into the Docker image at build time (APP_GIT_SHA)
     app_build_date: str = ""
 
@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     blog_prompt_version: str = "blog_v2"   # v2: depth modes + pictures from video frames / the local library
     blog_model: str = ""              # blank = same model as video analysis
     blog_thinking_level: str = "medium"
+
+    # ---- script writer (idea -> timed video script, grounded in the knowledge base)
+    script_prompt_version: str = "script_v1"
+    script_model: str = ""            # blank = same model as the blog writer / video analysis
+    script_thinking_level: str = "medium"
+    stt_provider: str = "browser"     # how the mic turns speech into text: browser (Chrome speech API) | whisper (local, later)
+    stt_language: str = "hi-IN"       # dictation language the mic starts in
 
     # upload proxies: raw camera files are shrunk (720p H.264) before they go to Gemini. Cost is per second of video,
     # not per byte, so nothing is lost; files over 2 GB can't be uploaded at all without this.

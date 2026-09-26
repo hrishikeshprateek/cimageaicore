@@ -27,8 +27,10 @@ from services.block_engine.proxy import ProxyPolicy
 from services import prompts as prompt_registry
 from services.prompts.registry import PromptRegistry
 from apps.api.prompt_routes import router as prompt_router
+from apps.api.script_routes import router as script_router
 from services.retrieval.retriever import Retriever
 from agents.blog_agent.agent import BlogAgent
+from agents.script_agent.agent import ScriptAgent
 
 WEB_DIR = REPO_ROOT / "web"
 
@@ -43,7 +45,8 @@ async def lifespan(app: FastAPI):
     from services.video_composer.settings import get_composer_settings
     registry = PromptRegistry(settings.data_dir / "prompts", settings.data_dir / "prompt_config.json",
                               defaults={"video-analysis": settings.prompt_version, "people-pass": settings.people_pass_version or "people_v1",
-                                        "blog": settings.blog_prompt_version, "cuts": get_composer_settings().cuts_prompt_version},
+                                        "blog": settings.blog_prompt_version, "script": settings.script_prompt_version,
+                                        "cuts": get_composer_settings().cuts_prompt_version},
                               institution_context=settings.institution_context)
     prompt_registry.set_current(registry)   # every load_prompt() from here on resolves through the registry (UI versions win)
     provider = build_provider(settings)
@@ -55,12 +58,15 @@ async def lifespan(app: FastAPI):
     embedder = build_embedder(settings)
     content = None
     images = None
+    scripts = None
     if getattr(store, "supports_vectors", False):
         from apps.api.content_store import ContentStore
+        from apps.api.script_store import ScriptStore
         from services.media_library.store import ImageStore
 
         content = ContentStore(store.pool)
         images = ImageStore(store.pool, settings.data_dir / "images")
+        scripts = ScriptStore(store.pool)
     runner = JobRunner(store, settings.worker_threads, embedder=embedder, content_store=content,
                        on_content_candidate=lambda job_id, n: auto_draft_job(app.state, job_id))
     retriever = Retriever(store, embedder)
@@ -69,8 +75,14 @@ async def lifespan(app: FastAPI):
         model=settings.blog_model or None, thinking_level=settings.blog_thinking_level or None,
     )
 
+    script_agent = ScriptAgent(
+        provider, retriever, prompt_version=registry.active("script"), institution_context=registry.institution_context,
+        model=settings.script_model or settings.blog_model or None, thinking_level=settings.script_thinking_level or None,
+    )
+
     registry.on_change(engine.reload)
     registry.on_change(blog_agent.reload)
+    registry.on_change(script_agent.reload)
     app.state.prompts = registry
     app.state.settings = settings
     app.state.engine = engine
@@ -81,6 +93,8 @@ async def lifespan(app: FastAPI):
     app.state.images = images
     app.state.retriever = retriever
     app.state.blog_agent = blog_agent
+    app.state.scripts = scripts
+    app.state.script_agent = script_agent
     app.state.watcher = _build_watcher(app, settings)
     app.state.watcher.start()
     log.info("provider=%s model=%s embedder=%s/%s store=%s jobs_loaded=%d data_dir=%s watcher=%s auto_draft=%s", provider.name, provider.model,
@@ -143,6 +157,7 @@ def create_app() -> FastAPI:
     app.include_router(nas_router)
     app.include_router(admin_router)
     app.include_router(prompt_router)
+    app.include_router(script_router)
 
     @app.get("/health", include_in_schema=False)
     def health() -> dict:

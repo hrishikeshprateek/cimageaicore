@@ -1,6 +1,7 @@
 // Drafts: the review queue. Read, edit, manage pictures, approve / reject. Also "New article" from a brief.
 import { api, post, put, upload, esc, attr, icon, ago, dt, words, md, toast, confirmDialog, openDialog, emptyState } from '../core.js';
 import { targetDialog } from './publishing.js';
+import { pickImage, uploadPhoto } from '../picker.js';
 
 export const title = 'Review drafts';
 export const subtitle = 'read, edit, approve — nothing is published without you';
@@ -146,21 +147,27 @@ function bodyInsertAfter(body, afterId, newId) {
 }
 
 async function saveImages(d, images, body, msg) {
-  try { draft = await put('/drafts/' + d.id + '/images', { images, body_markdown: body }); toast(`${msg} — saved as v${draft.version}`); ctx.refresh(); await draw(false); }
-  catch (e) { toast(e.message, true); }
+  try {
+    draft = await put('/drafts/' + d.id + '/images', { images, body_markdown: body });
+    toast(`${msg} — saved as v${draft.version}`); ctx.refresh();
+    await loadImagesFor(draft);   // a photo just uploaded from the desktop belongs in the picker's lists too
+    await draw(false);
+  } catch (e) { toast(e.message, true); }
 }
 
 const placedAs = (id) => PLACE.find((p) => p.image_id === id) || {};
+const picsFor = (d) => ({ jobId: d.evidence && d.evidence.job_id, extraIds: (d.evidence && d.evidence.offered_images) || [],
+                          pictures: (CANDS.length || LIB.length) ? { stills: CANDS, library: LIB } : null });
 
 function changePicture(d, id) {
   const cur = placedAs(id);
-  picturePicker({ d, heading: cur.placement === 'hero' ? 'Change the hero picture' : 'Change this picture', currentId: id, onPick: (img) =>
+  pickImage({ ...picsFor(d), heading: cur.placement === 'hero' ? 'Change the hero picture' : 'Change this picture', currentId: id, onPick: (img) =>
     saveImages(d, PLACE.map((p) => p.image_id === id ? { ...p, image_id: img.id, caption: img.description || p.caption || '', alt_text: img.description || p.alt_text || '' } : p),
       bodySwap(d.body_markdown || '', id, img.id), 'Picture changed') });
 }
 
 function addPicture(d, afterId) {
-  picturePicker({ d, heading: afterId ? 'Add a picture here' : 'Add a picture at the end', onPick: (img) =>
+  pickImage({ ...picsFor(d), heading: afterId ? 'Add a picture here' : 'Add a picture at the end', onPick: (img) =>
     saveImages(d, [...PLACE, { image_id: img.id, placement: 'inline', caption: img.description || '', alt_text: img.description || '' }],
       bodyInsertAfter(d.body_markdown || '', afterId, img.id), 'Picture added') });
 }
@@ -193,15 +200,7 @@ async function replaceWithFile(d, id, file) {
     const cur = placedAs(id);
     if (cur.image_id) await saveImages(d, PLACE.map((p) => p.image_id === id ? { ...p, image_id: img.id } : p), bodySwap(d.body_markdown || '', id, img.id), 'Picture replaced with ' + file.name);
     else await saveImages(d, [...PLACE, { image_id: img.id, placement: 'inline', caption: '', alt_text: img.description || '' }], bodyInsertAfter(d.body_markdown || '', null, img.id), 'Picture added');
-    await loadImagesFor(d);
   } catch (e) { toast(e.message, true); }
-}
-
-async function uploadPhoto(file, description) {
-  const fd = new FormData(); fd.append('file', file);
-  fd.append('description', description || file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim());
-  fd.append('tags', 'upload');
-  return upload('/images/library', fd);
 }
 
 function bindFigures(el, d) {
@@ -218,45 +217,6 @@ function bindFigures(el, d) {
     f.addEventListener('drop', (e) => { if (!files(e)) return; e.preventDefault(); f.classList.remove('over'); const file = e.dataTransfer.files[0]; if (file) replaceWithFile(d, f.dataset.img, file); });
   });
   const add = el.querySelector('#addpic'); if (add) add.onclick = () => addPicture(d, null);
-}
-
-// one dialog for every picture choice: stills from the video, the photo library, or a file from this computer
-async function picturePicker({ d, heading, currentId, onPick }) {
-  const dlg = openDialog(`<div class="dhd"><h3>${esc(heading)}</h3><p>A still from the analysed video, a photo from the library, or one from this computer — never the open internet.</p></div>
-    <div class="dbd pickbd">
-      <label class="drop sm" id="pdrop"><input type="file" id="pfile" accept=".jpg,.jpeg,.png,.webp" hidden><b>${icon('upload', 's')} Upload from this computer</b>drag a photo here or click to choose one — it joins the photo library and goes straight into the article</label>
-      <input type="search" id="pq" placeholder="Search by what is in the picture, a tag or a timestamp…" autocomplete="off">
-      <div id="pres"><div class="loading"><span class="spin"></span></div></div>
-      <div class="msg" id="pmsg"></div></div>
-    <div class="dft"><span class="muted body-s grow">One click on a picture puts it in place.</span><button class="btn" data-close>Cancel</button></div>`, { onOpen: init });
-  dlg.classList.add('wide');
-
-  async function init(dl) {
-    if (!CANDS.length && !LIB.length) await loadImagesFor(d);
-    const res = dl.querySelector('#pres'), q = dl.querySelector('#pq'), msg = dl.querySelector('#pmsg');
-    const tile = (c) => `<div class="pic pick ${c.id === currentId ? 'cur' : ''}" data-pick="${attr(c.id)}" title="${attr(c.description || '')}"><img src="${attr(c.url)}" loading="lazy"><div class="b"><div class="ellipsis">${esc(c.description || '(no description)')}</div><div class="k">${c.kind === 'frame' ? (c.timestamp ? 'still · ' + esc(c.timestamp) : 'still') : esc((c.tags || []).filter((t) => t !== 'upload').join(', ') || 'library photo')}${c.id === currentId ? ' · in place now' : ''}</div></div></div>`;
-    const hit = (c, needle) => !needle || `${c.description} ${(c.tags || []).join(' ')} ${c.timestamp || ''} ${c.source_name || ''}`.toLowerCase().includes(needle);
-    const paint = () => {
-      const needle = q.value.trim().toLowerCase();
-      const stills = CANDS.filter((c) => hit(c, needle)), lib = LIB.filter((c) => hit(c, needle));
-      res.innerHTML = `<div class="overline">Stills from this video (${stills.length})</div><div class="pics" style="margin:8px 0 18px">${stills.map(tile).join('') || '<div class="muted body-s">none — extract stills in the Pictures tab</div>'}</div>
-        <div class="overline">Photo library (${lib.length})</div><div class="pics" style="margin-top:8px">${lib.map(tile).join('') || '<div class="muted body-s">empty — upload a photo above</div>'}</div>`;
-      res.querySelectorAll('[data-pick]').forEach((n) => n.onclick = async () => { const c = [...CANDS, ...LIB].find((x) => x.id === n.dataset.pick); dl.close(); await onPick(c); });
-    };
-    q.oninput = paint; paint(); q.focus();
-
-    const take = async (file) => {
-      if (!file) return;
-      msg.textContent = `Uploading ${file.name}…`; msg.className = 'msg';
-      try { const rec = await uploadPhoto(file); await loadImagesFor(d); dl.close(); await onPick(rec); }
-      catch (e) { msg.textContent = e.message; msg.className = 'msg err'; }
-    };
-    const drop = dl.querySelector('#pdrop'), file = dl.querySelector('#pfile');
-    file.onchange = () => take(file.files[0]);
-    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
-    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-    drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); take(e.dataTransfer.files[0]); });
-  }
 }
 
 
