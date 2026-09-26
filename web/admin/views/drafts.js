@@ -34,19 +34,29 @@ async function draw(force) {
   if (sel) drawReader();
 }
 
-function figure(id, cls) { const im = (draft && draft.images || []).find((x) => x.image_id === id); if (!im) return ''; return `<figure class="${cls || ''}"><img src="/api/v1/images/${esc(id)}" alt="${attr(im.alt_text || '')}" loading="lazy">${im.caption ? '<figcaption>' + esc(im.caption) + '</figcaption>' : ''}</figure>`; }
+function figTools(id, hero) {
+  return `<div class="figtools" data-for="${attr(id)}"><button class="btn xs" data-fig="replace" title="put a different picture in this exact place">${icon('image', 's')}Change</button><button class="btn xs" data-fig="caption" title="caption and alt text">${icon('edit', 's')}Caption</button>${hero ? '' : `<button class="btn xs" data-fig="add" title="add another picture just below this one">${icon('add', 's')}Add below</button>`}<button class="btn xs danger" data-fig="remove" title="take this picture out of the article">${icon('trash', 's')}Remove</button></div><span class="figdrop"><b>Drop the photo to put it here</b></span>`;
+}
+
+function figure(id, cls) {
+  const im = (draft && draft.images || []).find((x) => x.image_id === id); if (!im) return '';
+  const cap = im.caption ? `<figcaption>${esc(im.caption)}</figcaption>` : '<figcaption class="add">add a caption</figcaption>';
+  return `<figure class="fig ${cls || ''}" data-img="${attr(id)}"><img src="/api/v1/images/${esc(id)}" alt="${attr(im.alt_text || '')}" loading="lazy">${figTools(id, false)}${cap}</figure>`;
+}
 
 function drawReader() {
   const el = root.querySelector('#reader'); const d = draft; if (!el) return;
   if (!d) { el.innerHTML = emptyState('review', 'Select a draft to read it'); return; }
+  PLACE = (d.images || []).map((x) => ({ ...x }));   // the article tab edits pictures where they sit, the same list the Pictures tab saves
   const hero = (d.images || []).find((i) => i.placement === 'hero'); const seo = d.seo || {}, so = d.social || {}; const canDecide = ['new', 'in_review'].includes(d.status);
   const ev = (d.evidence && d.evidence.blocks) || [];
   const tabs = [['article', 'Article'], ['images', `Pictures (${(d.images || []).length})`], ['seo', 'SEO & social'], ['evidence', `Evidence (${(d.citations || []).length} cited)`], ['edit', 'Edit'], ['versions', `Versions (${d.version})`], ['published', 'Published']];
-  let h = (hero ? `<img class="hero" src="/api/v1/images/${esc(hero.image_id)}" alt="${attr(hero.alt_text || '')}">` : '') + `<div class="rhead"><h2>${esc(d.title || d.brief)}</h2><div class="meta"><span class="tag ${esc(d.status)}">${esc(d.status).replace('_', ' ')}</span><span>v${d.version}</span><span>·</span><span>${words(d.body_markdown)} words</span><span>·</span><span>${esc(d.model || '')} / ${esc(d.prompt_version || '')}</span><span>·</span><span>${esc(d.depth || 'standard')}</span><span>·</span><span>${dt(d.created_at)}</span>${d.opportunity_id ? `<span>·</span><span class="mono">opp ${esc(d.opportunity_id)}</span>` : ''}</div>
+  let h = (hero ? `<div class="fig fig-hero" data-img="${attr(hero.image_id)}"><img class="hero" src="/api/v1/images/${esc(hero.image_id)}" alt="${attr(hero.alt_text || '')}">${figTools(hero.image_id, true)}</div>` : '') + `<div class="rhead"><h2>${esc(d.title || d.brief)}</h2><div class="meta"><span class="tag ${esc(d.status)}">${esc(d.status).replace('_', ' ')}</span><span>v${d.version}</span><span>·</span><span>${words(d.body_markdown)} words</span><span>·</span><span>${esc(d.model || '')} / ${esc(d.prompt_version || '')}</span><span>·</span><span>${esc(d.depth || 'standard')}</span><span>·</span><span>${dt(d.created_at)}</span>${d.opportunity_id ? `<span>·</span><span class="mono">opp ${esc(d.opportunity_id)}</span>` : ''}</div>
     ${d.warnings && d.warnings.length ? `<div class="banner warn" style="margin-top:12px">${icon('info')}<div>${d.warnings.map(esc).join(' · ')}</div></div>` : ''}${d.error ? `<div class="banner err" style="margin-top:12px">${icon('warn')}<div class="mono">${esc(d.error)}</div></div>` : ''}</div>`;
   h += `<div class="actions">${canDecide ? `<button class="btn ok" data-s="approved">${icon('check')}Approve</button>${d.status !== 'in_review' ? '<button class="btn outlined" data-s="in_review">Needs changes</button>' : ''}<button class="btn danger" data-s="rejected">Reject</button>` : d.status === 'approved' ? `<button class="btn filled" id="publish">${icon('send')}Publish</button><button class="btn outlined" data-s="in_review">Reopen</button>` : d.status === 'rejected' ? '<button class="btn outlined" data-s="in_review">Reopen</button>' : ''}${d.status !== 'generating' ? `<button class="btn" id="regen">${icon('refresh')}Regenerate</button><button class="btn" id="regen2" title="rewrite as an in-depth feature">In-depth</button>` : ''}<span class="sp"></span><span class="muted body-s">${d.status === 'generating' ? '<span class="spin"></span> the writer is working…' : ''}</span></div>`;
   h += '<div class="tabs" style="padding:0 16px">' + tabs.map(([k, l]) => `<span class="tab ${tab === k ? 'on' : ''}" data-t="${k}">${l}</span>`).join('') + '</div>';
-  if (tab === 'article') h += `<div class="article" id="article">${hero ? '' : ''}${md(d.body_markdown || '', { figure }) || '<p class="muted">no text yet</p>'}</div><p class="muted body-s" style="padding:0 28px 24px">Superscripts are evidence ids — click one to see the block. They are stripped on publish.</p>`;
+  if (tab === 'article') h += `<div class="article" id="article">${md(d.body_markdown || '', { figure }) || '<p class="muted">no text yet</p>'}</div>
+    <div class="row" style="padding:0 28px 24px;gap:12px"><button class="btn sm tonal" id="addpic">${icon('image', 's')}Add a picture</button><span class="muted body-s grow">Point at a picture to change it where it sits — or drag a photo from your computer straight onto it. Superscripts are evidence ids; click one to see the block. They are stripped on publish.</span></div>`;
   if (tab === 'images') h += renderImagesTab(d);
   if (tab === 'seo') h += `<dl class="kv"><dt>Slug</dt><dd class="mono">${esc(d.slug || '–')}</dd><dt>SEO title</dt><dd>${esc(seo.seo_title || '–')}</dd><dt>Meta description</dt><dd>${esc(seo.meta_description || '–')} <span class="muted body-s">(${(seo.meta_description || '').length} chars)</span></dd><dt>Excerpt</dt><dd>${esc(seo.excerpt || '–')}</dd><dt>Tags</dt><dd>${(seo.tags || []).map((t) => '<span class="tag">' + esc(t) + '</span>').join(' ') || '–'}</dd><dt>Evidence gaps</dt><dd>${(seo.evidence_gaps || []).map(esc).join('<br>') || 'none reported'}</dd></dl><div style="padding:0 28px 24px">${Object.entries(so).map(([k, v]) => `<div class="overline" style="margin-top:12px">${esc(k)}</div><div class="snippet">${esc(typeof v === 'string' ? v : JSON.stringify(v, null, 1))}</div>`).join('') || '<span class="muted">no social snippets</span>'}</div>`;
   if (tab === 'evidence') { const cited = new Set((d.citations || []).map((c) => c.block_id)); h += `<div style="padding:16px 28px"><p class="muted body-s" style="margin-top:0">${ev.length} blocks were offered to the writer from ${(d.evidence.sources || []).map((s) => esc(s.source_name) + ' (' + s.blocks + ')').join(', ') || 'the library'}. Highlighted = cited in the article.</p>${ev.map((b) => `<div class="evb ${cited.has(b.block_id) ? 'cited' : ''} ${hl === b.block_id ? 'hl' : ''}" id="ev-${esc(b.block_id)}"><span class="ty">${esc(b.block_type)}</span> ${b.timestamp ? '<span class="tag mono">' + esc(b.timestamp) + '</span> ' : ''}${esc(b.text)}<div class="src">${esc(b.source_name)} · ${esc(b.block_id)}</div></div>`).join('') || '<div class="empty">no evidence stored</div>'}</div>`; }
@@ -67,6 +77,7 @@ function drawReader() {
   const rg2 = el.querySelector('#regen2'); if (rg2) rg2.onclick = async () => { if (!(await confirmDialog({ title: 'Rewrite as an in-depth feature?', body: '~1500 words with takeaways, FAQ and pictures. The current text stays as a version.', ok: 'Rewrite' }))) return; try { await post('/drafts/' + d.id + '/regenerate?depth=in_depth'); toast('Rewriting in depth…'); draft = null; draw(true); } catch (e) { toast(e.message, true); } };
   const sv = el.querySelector('#eSave'); if (sv) sv.onclick = async () => { sv.disabled = true; try { draft = await put('/drafts/' + d.id, { title: el.querySelector('#eTitle').value, body_markdown: el.querySelector('#eBody').value }); tab = 'article'; toast('Saved as v' + draft.version); draw(false); } catch (e) { toast(e.message, true); sv.disabled = false; } };
   el.querySelectorAll('sup.cite').forEach((s) => s.onclick = () => { hl = s.dataset.id; tab = 'evidence'; drawReader(); const e = document.getElementById('ev-' + hl); if (e) e.scrollIntoView({ block: 'center' }); });
+  if (tab === 'article') bindFigures(el, d);
   if (tab === 'images') bindImagesTab(el, d);
   if (tab === 'versions') api('/drafts/' + d.id + '/versions').then((vs) => { const v = el.querySelector('#vers'); if (v) v.innerHTML = vs.map((x) => `<div class="evb"><b>v${x.version}</b> · ${esc(x.edited_by || x.author || 'writer')} · ${dt(x.created_at)}<div class="muted body-s" style="margin-top:4px">${esc(x.title || '')}</div></div>`).join('') || '<div class="empty">no versions</div>'; }).catch((e) => { const v = el.querySelector('#vers'); if (v) v.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
@@ -120,6 +131,132 @@ function bindImagesTab(v, d) {
   const save = v.querySelector('#imgSave'); if (save) save.onclick = async () => { readPlacements(v); save.disabled = true; try { const j = await put('/drafts/' + d.id + '/images', { images: PLACE }); toast('Pictures saved as v' + j.version); draft = null; tab = 'article'; draw(true); } catch (e) { toast(e.message, true); save.disabled = false; } };
   const up = v.querySelector('#libUp'); if (up) up.onclick = async () => { const f = v.querySelector('#libFile').files[0]; const m = v.querySelector('#libMsg'); if (!f) { m.textContent = 'Choose a photo.'; m.className = 'msg err'; return; } const fd = new FormData(); fd.append('file', f); fd.append('description', v.querySelector('#libDesc').value); fd.append('tags', v.querySelector('#libTags').value); up.disabled = true; try { const j = await upload('/images/library', fd); await loadImagesFor(d); drawReader(); toast('Added ' + j.source_name); } catch (e) { m.textContent = e.message; m.className = 'msg err'; up.disabled = false; } };
   const imp = v.querySelector('#libImp'); if (imp) imp.onclick = async () => { const p = v.querySelector('#libPath').value.trim(); const m = v.querySelector('#libMsg'); if (!p) { m.textContent = 'Enter a folder path.'; m.className = 'msg err'; return; } imp.disabled = true; try { const r = await post('/images/library/import', { path: p }); await loadImagesFor(d); drawReader(); toast('Imported ' + r.length + ' photo(s)'); } catch (e) { m.textContent = e.message; m.className = 'msg err'; imp.disabled = false; } };
+}
+
+
+// ------------------------------------------------- change a picture where it sits (article tab), incl. a photo from this computer
+const markerRe = (id, g) => new RegExp('^[ \\t]*\\[img=' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\][ \\t]*$', g || 'm');
+const bodySwap = (body, oldId, newId) => body.replace(markerRe(oldId), `[img=${newId}]`);
+const bodyDrop = (body, id) => body.replace(new RegExp('^[ \\t]*\\[img=' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\][ \\t]*\\n?', 'm'), '');
+function bodyInsertAfter(body, afterId, newId) {
+  const m = afterId ? markerRe(afterId).exec(body) : null;
+  if (!m) return body.replace(/\s*$/, '') + `\n\n[img=${newId}]\n`;
+  const end = m.index + m[0].length;
+  return body.slice(0, end) + `\n\n[img=${newId}]` + body.slice(end);
+}
+
+async function saveImages(d, images, body, msg) {
+  try { draft = await put('/drafts/' + d.id + '/images', { images, body_markdown: body }); toast(`${msg} — saved as v${draft.version}`); ctx.refresh(); await draw(false); }
+  catch (e) { toast(e.message, true); }
+}
+
+const placedAs = (id) => PLACE.find((p) => p.image_id === id) || {};
+
+function changePicture(d, id) {
+  const cur = placedAs(id);
+  picturePicker({ d, heading: cur.placement === 'hero' ? 'Change the hero picture' : 'Change this picture', currentId: id, onPick: (img) =>
+    saveImages(d, PLACE.map((p) => p.image_id === id ? { ...p, image_id: img.id, caption: img.description || p.caption || '', alt_text: img.description || p.alt_text || '' } : p),
+      bodySwap(d.body_markdown || '', id, img.id), 'Picture changed') });
+}
+
+function addPicture(d, afterId) {
+  picturePicker({ d, heading: afterId ? 'Add a picture here' : 'Add a picture at the end', onPick: (img) =>
+    saveImages(d, [...PLACE, { image_id: img.id, placement: 'inline', caption: img.description || '', alt_text: img.description || '' }],
+      bodyInsertAfter(d.body_markdown || '', afterId, img.id), 'Picture added') });
+}
+
+async function removePicture(d, id) {
+  const hero = placedAs(id).placement === 'hero';
+  if (!(await confirmDialog({ title: hero ? 'Remove the hero picture?' : 'Remove this picture?', body: 'The text is untouched and the picture stays in the library — you can put it back any time.', ok: 'Remove', danger: true }))) return;
+  await saveImages(d, PLACE.filter((p) => p.image_id !== id), bodyDrop(d.body_markdown || '', id), 'Picture removed');
+}
+
+function captionDialog(d, id) {
+  const cur = placedAs(id);
+  openDialog(`<div class="dhd"><h3>Caption</h3><p>Shown under the picture on the website. The alt text is read by screen readers and search engines.</p></div>
+    <div class="dbd"><img src="/api/v1/images/${esc(id)}" alt="" style="width:100%;max-height:220px;object-fit:cover;border-radius:var(--r)">
+      <div class="field"><label>Caption</label><input type="text" id="cCap" value="${attr(cur.caption || '')}" placeholder="what this picture shows"></div>
+      <div class="field"><label>Alt text</label><input type="text" id="cAlt" value="${attr(cur.alt_text || '')}" placeholder="described for someone who cannot see it"></div></div>
+    <div class="dft"><button class="btn" data-close>Cancel</button><button class="btn filled" id="cSave">${icon('check')}Save</button></div>`, {
+    onOpen(dl) {
+      const save = async () => { dl.querySelector('#cSave').disabled = true; await saveImages(d, PLACE.map((p) => p.image_id === id ? { ...p, caption: dl.querySelector('#cCap').value, alt_text: dl.querySelector('#cAlt').value } : p), d.body_markdown || '', 'Caption saved'); dl.close(); };
+      dl.querySelector('#cSave').onclick = save; dl.querySelector('#cCap').focus();
+      dl.querySelectorAll('input').forEach((i) => i.onkeydown = (e) => { if (e.key === 'Enter') save(); });
+    },
+  });
+}
+
+async function replaceWithFile(d, id, file) {
+  toast('Uploading ' + file.name + '…');
+  try {
+    const img = await uploadPhoto(file);
+    const cur = placedAs(id);
+    if (cur.image_id) await saveImages(d, PLACE.map((p) => p.image_id === id ? { ...p, image_id: img.id } : p), bodySwap(d.body_markdown || '', id, img.id), 'Picture replaced with ' + file.name);
+    else await saveImages(d, [...PLACE, { image_id: img.id, placement: 'inline', caption: '', alt_text: img.description || '' }], bodyInsertAfter(d.body_markdown || '', null, img.id), 'Picture added');
+    await loadImagesFor(d);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function uploadPhoto(file, description) {
+  const fd = new FormData(); fd.append('file', file);
+  fd.append('description', description || file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim());
+  fd.append('tags', 'upload');
+  return upload('/images/library', fd);
+}
+
+function bindFigures(el, d) {
+  el.querySelectorAll('.figtools .btn').forEach((b) => b.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const id = b.parentElement.dataset.for;
+    ({ replace: changePicture, caption: captionDialog, remove: removePicture }[b.dataset.fig] || ((dd, i) => addPicture(dd, i)))(d, id);
+  });
+  el.querySelectorAll('.fig figcaption').forEach((fc) => fc.onclick = () => captionDialog(d, fc.closest('.fig').dataset.img));
+  el.querySelectorAll('.fig').forEach((f) => {
+    const files = (e) => [...(e.dataTransfer ? e.dataTransfer.types : [])].includes('Files');
+    f.addEventListener('dragover', (e) => { if (!files(e)) return; e.preventDefault(); f.classList.add('over'); });
+    f.addEventListener('dragleave', (e) => { if (!f.contains(e.relatedTarget)) f.classList.remove('over'); });
+    f.addEventListener('drop', (e) => { if (!files(e)) return; e.preventDefault(); f.classList.remove('over'); const file = e.dataTransfer.files[0]; if (file) replaceWithFile(d, f.dataset.img, file); });
+  });
+  const add = el.querySelector('#addpic'); if (add) add.onclick = () => addPicture(d, null);
+}
+
+// one dialog for every picture choice: stills from the video, the photo library, or a file from this computer
+async function picturePicker({ d, heading, currentId, onPick }) {
+  const dlg = openDialog(`<div class="dhd"><h3>${esc(heading)}</h3><p>A still from the analysed video, a photo from the library, or one from this computer — never the open internet.</p></div>
+    <div class="dbd pickbd">
+      <label class="drop sm" id="pdrop"><input type="file" id="pfile" accept=".jpg,.jpeg,.png,.webp" hidden><b>${icon('upload', 's')} Upload from this computer</b>drag a photo here or click to choose one — it joins the photo library and goes straight into the article</label>
+      <input type="search" id="pq" placeholder="Search by what is in the picture, a tag or a timestamp…" autocomplete="off">
+      <div id="pres"><div class="loading"><span class="spin"></span></div></div>
+      <div class="msg" id="pmsg"></div></div>
+    <div class="dft"><span class="muted body-s grow">One click on a picture puts it in place.</span><button class="btn" data-close>Cancel</button></div>`, { onOpen: init });
+  dlg.classList.add('wide');
+
+  async function init(dl) {
+    if (!CANDS.length && !LIB.length) await loadImagesFor(d);
+    const res = dl.querySelector('#pres'), q = dl.querySelector('#pq'), msg = dl.querySelector('#pmsg');
+    const tile = (c) => `<div class="pic pick ${c.id === currentId ? 'cur' : ''}" data-pick="${attr(c.id)}" title="${attr(c.description || '')}"><img src="${attr(c.url)}" loading="lazy"><div class="b"><div class="ellipsis">${esc(c.description || '(no description)')}</div><div class="k">${c.kind === 'frame' ? (c.timestamp ? 'still · ' + esc(c.timestamp) : 'still') : esc((c.tags || []).filter((t) => t !== 'upload').join(', ') || 'library photo')}${c.id === currentId ? ' · in place now' : ''}</div></div></div>`;
+    const hit = (c, needle) => !needle || `${c.description} ${(c.tags || []).join(' ')} ${c.timestamp || ''} ${c.source_name || ''}`.toLowerCase().includes(needle);
+    const paint = () => {
+      const needle = q.value.trim().toLowerCase();
+      const stills = CANDS.filter((c) => hit(c, needle)), lib = LIB.filter((c) => hit(c, needle));
+      res.innerHTML = `<div class="overline">Stills from this video (${stills.length})</div><div class="pics" style="margin:8px 0 18px">${stills.map(tile).join('') || '<div class="muted body-s">none — extract stills in the Pictures tab</div>'}</div>
+        <div class="overline">Photo library (${lib.length})</div><div class="pics" style="margin-top:8px">${lib.map(tile).join('') || '<div class="muted body-s">empty — upload a photo above</div>'}</div>`;
+      res.querySelectorAll('[data-pick]').forEach((n) => n.onclick = async () => { const c = [...CANDS, ...LIB].find((x) => x.id === n.dataset.pick); dl.close(); await onPick(c); });
+    };
+    q.oninput = paint; paint(); q.focus();
+
+    const take = async (file) => {
+      if (!file) return;
+      msg.textContent = `Uploading ${file.name}…`; msg.className = 'msg';
+      try { const rec = await uploadPhoto(file); await loadImagesFor(d); dl.close(); await onPick(rec); }
+      catch (e) { msg.textContent = e.message; msg.className = 'msg err'; }
+    };
+    const drop = dl.querySelector('#pdrop'), file = dl.querySelector('#pfile');
+    file.onchange = () => take(file.files[0]);
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); take(e.dataTransfer.files[0]); });
+  }
 }
 
 

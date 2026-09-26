@@ -216,5 +216,19 @@ def test_frames_images_and_draft_pictures_through_the_api(pg_app, tiny_video):  
     assert r.status_code == 200, r.text
     d2 = r.json()
     assert d2["version"] == d["version"] + 1 and f"[img={lib.json()['id']}]" in d2["body_markdown"] and "![gate](/api/v1/images/" in d2["body_markdown_clean"]
+    # what the article view does when the editor changes a picture where it sits: the marker line is swapped, never moved
+    photo2 = Path(tiny_video).parent / "lab.jpg"
+    Image.new("RGB", (400, 300), (120, 10, 10)).save(photo2)
+    with photo2.open("rb") as f:
+        lib2 = client.post("/api/v1/images/library", files={"file": ("lab.jpg", f, "image/jpeg")}, data={"description": "The lab"}).json()
+    old_id, lines = lib.json()["id"], d2["body_markdown"].splitlines()
+    at = lines.index(f"[img={old_id}]")
+    swapped = "\n".join(lines[:at] + [f"[img={lib2['id']}]"] + lines[at + 1:])
+    d3 = client.put(f"/api/v1/drafts/{d['id']}/images",
+                    json={"images": [d["images"][0], {"image_id": lib2["id"], "placement": "inline", "caption": "The lab", "alt_text": "lab"}],
+                          "body_markdown": swapped}).json()
+    assert d3["body_markdown"].splitlines()[at] == f"[img={lib2['id']}]" and f"[img={old_id}]" not in d3["body_markdown"]
+    assert d3["version"] == d2["version"] + 1 and [i["image_id"] for i in d3["images"]] == [d["images"][0]["image_id"], lib2["id"]]
+
     assert client.put(f"/api/v1/drafts/{d['id']}/images", json={"images": [{"image_id": "zzz", "placement": "inline", "caption": "", "alt_text": ""}]}).status_code == 400
     assert client.delete(f"/api/v1/images/{lib.json()['id']}").json()["deleted"]
