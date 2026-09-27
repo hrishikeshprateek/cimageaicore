@@ -62,6 +62,8 @@ class ComposerContext:
                          max_chars_per_line=s.caption_max_chars_per_line, max_lines=s.caption_max_lines, caption_min_seconds=s.caption_min_seconds)
 
     def _run(self, rec: RenderRecord) -> None:
+        if (rec.detail or {}).get("kind") == "storyboard":
+            return self._run_storyboard(rec)
         template = self.template(rec.template)
         out = render(rec.spec, template, self.settings, output_path_for(self.settings, rec.job_id, rec.id, rec.preset))
         self.renders.update(
@@ -70,6 +72,22 @@ class ComposerContext:
             detail={"layout": out.layout.model_dump(), "text_shaping": out.text_shaping, "captions_ass": out.captions_ass, "poster": out.poster_path, "log_tail": out.log_tail},
         )
         log.info("render %s done: %s (%.1fs)", rec.id, out.output_path, out.render_seconds)
+
+    def _run_storyboard(self, rec: RenderRecord) -> None:
+        """A whole script: every scene rendered with the same template, stitched, voiceover laid over it."""
+        from services.video_composer.storyboard import Segment, Storyboard, render_storyboard
+
+        d = rec.detail or {}
+        board = Storyboard(segments=[Segment(**seg) for seg in d["segments"]], warnings=list(d.get("warnings") or []), job_id=rec.job_id)
+        out = render_storyboard(board, self.template(rec.template), self.settings, output_path_for(self.settings, rec.job_id, rec.id, rec.preset),
+                                preset=rec.preset, audio=d.get("audio", "voiceover"), fit=d.get("fit"),
+                                on_progress=lambda i, n: self.renders.update(rec.id, detail={**d, "progress": {"scene": i + 1, "of": n}}))
+        self.renders.update(
+            rec.id, status="DONE", output_path=out["output_path"], width=out["width"], height=out["height"],
+            duration_seconds=out["duration"], size_bytes=out["size_bytes"], render_seconds=out["render_seconds"],
+            detail={**d, **out, "progress": None},
+        )
+        log.info("storyboard %s done: %s (%d scenes, %.1fs)", rec.id, out["output_path"], len(board.segments), out["render_seconds"])
 
 
 def _ctx(request: Request) -> ComposerContext:

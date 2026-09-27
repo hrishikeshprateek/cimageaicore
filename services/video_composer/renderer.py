@@ -54,6 +54,7 @@ class RenderSpec(BaseModel):
     x264_preset: str = "medium"
     audio_bitrate: str = "160k"
     audio_fade: float = 0.15
+    force_audio_track: bool = False   # silent stereo track when the source has none, so segments concat cleanly (storyboards)
 
     @property
     def duration(self) -> float:
@@ -185,10 +186,14 @@ def build_command(spec: RenderSpec, template: Template, layout: ResolvedLayout, 
     if spec.source_has_audio:
         fade = spec.audio_fade
         graph.append(f"[0:a]afade=t=in:st=0:d={_f(fade)},afade=t=out:st={_f(max(0.0, dur - fade))}:d={_f(fade)}[a]")
+    elif spec.force_audio_track:
+        cmd += ["-f", "lavfi", "-t", _f(dur), "-i", "anullsrc=r=48000:cl=stereo"]
+        graph.append(f"[{inputs}:a]anull[a]")
+        inputs += 1
 
     enc, enc_extra = ff.video_encoder()
     cmd += ["-filter_complex", ";".join(graph), "-map", "[v]"]
-    if spec.source_has_audio:
+    if spec.source_has_audio or spec.force_audio_track:
         cmd += ["-map", "[a]", "-c:a", "aac", "-b:a", spec.audio_bitrate, "-ar", "48000", "-ac", "2"]
     else:
         cmd += ["-an"]

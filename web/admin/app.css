@@ -246,6 +246,7 @@ input[type=checkbox],input[type=radio]{accent-color:var(--g-blue);width:18px;hei
 .scene .sbtns{display:flex;flex-direction:column;gap:4px}
 .scene .sbtns .btn{width:32px;min-width:32px;padding:0;justify-content:center}
 .scene .sbtns [data-mv="-1"] .icn{transform:rotate(-90deg)}.scene .sbtns [data-mv="1"] .icn{transform:rotate(90deg)}
+.scene audio.vo{width:100%;max-width:420px;height:32px;margin-top:2px}
 .tele{position:fixed;inset:0;z-index:200;background:#0b0b0c;color:#fff;display:flex;flex-direction:column}
 .tele .tbar{display:flex;align-items:center;gap:10px;padding:10px 16px;background:#17181a;border-bottom:1px solid #2a2c2f}
 .tele .tbar .btn{background:#26282b;border-color:#3c4043;color:#fff}.tele .tbar .btn:hover{background:#34363a;color:#fff}

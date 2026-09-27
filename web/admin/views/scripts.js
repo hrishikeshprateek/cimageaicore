@@ -6,6 +6,7 @@ export const title = 'Script writer';
 export const subtitle = 'speak or type an idea — the script comes back timed, in Hindi or English, from our own footage';
 
 let root, ctx, opts = null, scripts = [], sel = null, script = null, tab = 'scenes', listSig = '', dirty = false, jobs = [];
+let voices = null, templates = null, videos = [], videoT = null, vform = { preset: 'reels', audio: 'voiceover', voice_id: '', template: '' };
 let form = { language: 'hi', seconds: 30, style: 'viral_reel', job_id: '', idea: '' };
 let rec = null;   // live dictation session
 const sigOf = (ss) => JSON.stringify([sel, ss.map((s) => [s.id, s.status, s.version, s.title])]);
@@ -25,7 +26,7 @@ export async function tick() {
   if (sigOf(ss) === listSig && !writing) return;
   await draw(writing);
 }
-export function destroy() { stopDictation(); root = null; }
+export function destroy() { stopDictation(); clearTimeout(videoT); root = null; }
 
 async function draw(force) {
   if (!opts || !opts.available) { root.innerHTML = `<div class="card"><div class="bd">${emptyState('movie', 'The script writer needs PostgreSQL', 'set DATABASE_URL and restart')}</div></div>`; return; }
@@ -138,7 +139,9 @@ function drawScript() {
   const words = (s.scenes || []).reduce((a, x) => a + (x.voiceover || '').trim().split(/\s+/).filter(Boolean).length, 0);
   const canDecide = ['new', 'in_review'].includes(s.status);
   const gaps = (s.extras && s.extras.evidence_gaps) || [], shots = (s.extras && s.extras.shot_list) || [];
-  const tabs = [['scenes', `Scenes (${(s.scenes || []).length})`], ['post', 'Caption & post'], ['idea', 'Idea & evidence'], ['versions', `Versions (${s.version})`]];
+  const vo = (s.extras && s.extras.voiceover) || null;
+  const tabs = [['scenes', `Scenes (${(s.scenes || []).length})`], ['video', `Voice & video${videos.length ? ' (' + videos.length + ')' : (vo ? ' ✓' : '')}`],
+    ['post', 'Caption & post'], ['idea', 'Idea & evidence'], ['versions', `Versions (${s.version})`]];
   let h = `<div class="rhead"><h2 contenteditable="plaintext-only" id="stitle">${esc(s.title || 'Untitled script')}</h2>
     <div class="meta"><span class="tag ${esc(s.status)}">${esc(s.status).replace('_', ' ')}</span><span>v${s.version}</span><span>·</span><span>${esc({ hi: 'हिंदी', en: 'English', hinglish: 'Hinglish' }[s.language] || s.language)}</span><span>·</span>
       <span title="planned vs asked for">${mmss(planned)} / ${lenLabel(s.target_seconds)}</span><span>·</span><span>${num(words)} words</span><span>·</span><span>${esc(s.style.replace('_', ' '))}</span><span>·</span><span>${esc(s.model || '')} / ${esc(s.prompt_version || '')}</span></div>
@@ -149,16 +152,18 @@ function drawScript() {
     <a class="btn" href="/api/v1/scripts/${esc(s.id)}/export" download>${icon('download')}Download</a><span class="sp"></span><button class="btn xs danger" id="del" title="delete this script">${icon('trash', 's')}</button></div>
   <div class="tabs" style="padding:0 16px">${tabs.map(([k, l]) => `<span class="tab ${tab === k ? 'on' : ''}" data-t="${k}">${l}</span>`).join('')}</div>`;
 
+  const voiced = new Set(((vo && vo.scenes) || []).map((x) => +x.n));
   if (tab === 'scenes') {
     let t = 0;
     h += `<div class="bd"><div class="field" style="margin-bottom:14px"><label>Hook — the first three seconds</label><input type="text" id="shook" value="${attr(s.hook || '')}"></div>
-      <div class="scenes">${(s.scenes || []).map((sc, i) => { const from = t; t += +sc.seconds || 0; return sceneCard(sc, i, from, t); }).join('')}</div>
+      <div class="scenes">${(s.scenes || []).map((sc, i) => { const from = t; t += +sc.seconds || 0; return sceneCard(sc, i, from, t, voiced.has(sc.n)); }).join('')}</div>
       <div class="row" style="margin-top:12px"><button class="btn sm tonal" id="addscene">${icon('add', 's')}Add a scene</button></div>
       <div class="field" style="margin-top:16px"><label>Call to action</label><input type="text" id="scta" value="${attr(s.cta || '')}"></div>
       ${shots.length ? `<div class="banner" style="margin-top:14px">${icon('movie')}<div><b>Still to film:</b> ${shots.map(esc).join(' · ')}</div></div>` : ''}
       ${gaps.length ? `<div class="banner warn" style="margin-top:10px">${icon('info')}<div><b>The library cannot back:</b> ${gaps.map(esc).join(' · ')}</div></div>` : ''}
       <div class="row" style="margin-top:16px;gap:10px"><button class="btn filled" id="ssave" disabled>${icon('check')}Save as v${s.version + 1}</button><span class="muted body-s" id="smsg">Edit any line, reorder or swap the b-roll — saving keeps the old version.</span></div></div>`;
   }
+  if (tab === 'video') h += voiceVideoTab(s, vo);
   if (tab === 'post') h += `<div class="bd"><div class="field"><label>Caption</label><textarea id="scap" style="min-height:120px">${esc(s.caption || '')}</textarea></div>
       <div class="field" style="margin-top:12px"><label>Hashtags</label><input type="text" id="stags" value="${attr((s.hashtags || []).join(' '))}"></div>
       <div class="kv" style="padding:16px 0 0"><dt>Thumbnail</dt><dd>${esc((s.extras || {}).thumbnail_idea || '–')}</dd><dt>Music</dt><dd>${esc((s.extras || {}).music_mood || '–')}</dd></div>
@@ -174,7 +179,7 @@ function drawScript() {
   bindScript(el, s);
 }
 
-function sceneCard(sc, i, from, to) {
+function sceneCard(sc, i, from, to, voiced) {
   const ev = (sc.evidence_ids || []).map((x) => `<span class="tag mono" title="knowledge block behind this line">${esc(x)}</span>`).join(' ');
   const shot = sc.b_roll_image_id ? `<img src="/api/v1/images/${esc(sc.b_roll_image_id)}" alt="" loading="lazy">`
     : `<div class="noshot">${icon('movie')}<span>${sc.b_roll_block_id ? 'from the footage' : 'to be filmed'}</span></div>`;
@@ -185,6 +190,7 @@ function sceneCard(sc, i, from, to) {
       <input type="text" data-k="visual" value="${attr(sc.visual || '')}" placeholder="what the camera shows">
       <textarea data-k="voiceover" placeholder="what is said over this shot">${esc(sc.voiceover || '')}</textarea>
       <div class="row gap4"><input type="text" data-k="on_screen_text" value="${attr(sc.on_screen_text || '')}" placeholder="text on screen (optional)" style="max-width:280px">${sc.b_roll_block_id ? `<span class="tag mono" title="the moment in the analysed video this shot comes from">${esc(sc.b_roll_block_id)}</span>` : ''}${ev}</div>
+      ${voiced ? `<audio class="vo" controls preload="none" src="/api/v1/scripts/${esc(script.id)}/audio/${sc.n}"></audio>` : ''}
     </div>
     <div class="sbtns"><button class="btn xs" data-mv="-1" title="move up">${icon('chevron', 's')}</button><button class="btn xs" data-mv="1" title="move down">${icon('chevron', 's')}</button><button class="btn xs danger" data-rm="${i}" title="delete scene">${icon('trash', 's')}</button></div>
   </div>`;
@@ -247,6 +253,7 @@ function bindScript(el, s) {
     if (!(await confirmDialog({ title: 'Delete this script?', body: 'Gone for good, with its versions.', ok: 'Delete', danger: true }))) return;
     try { await del('/scripts/' + s.id); sel = null; script = null; toast('Deleted'); await draw(true); } catch (e) { toast(e.message, true); }
   };
+  if (tab === 'video') bindVoiceVideo(el, s);
   if (tab === 'versions') api('/scripts/' + s.id + '/versions').then((vs) => { const v = el.querySelector('#svers'); if (v) v.innerHTML = vs.map((x) => `<div class="evb"><b>v${x.version}</b> · ${esc(x.edited_by)} · ${x.scenes} scenes · ${ago(x.created_at)}<div class="muted body-s">${esc(x.title || '')}</div></div>`).join('') || '<div class="empty">no versions</div>'; });
 }
 
@@ -293,4 +300,96 @@ function teleprompter(s) {
   el.querySelectorAll('[data-t]').forEach((b) => b.onclick = () => ({ play, close, slower: () => inner.style.fontSize = (size = Math.max(22, size - 6)) + 'px', faster: () => inner.style.fontSize = (size = Math.min(88, size + 6)) + 'px' }[b.dataset.t]()));
   document.addEventListener('keydown', key);
   inner.style.fontSize = size + 'px';
+}
+
+
+// ---------------------------------------------------------------- voice (ElevenLabs) + the finished video
+function voiceVideoTab(s, vo) {
+  const prov = opts.voiceover && opts.voiceover.provider;
+  const mins = (n) => `${Math.floor(n / 60)}:${String(Math.round(n % 60)).padStart(2, '0')}`;
+  const voiceBox = !prov
+    ? `<div class="banner warn">${icon('info')}<div><b>Voiceovers are off.</b> Put your ElevenLabs key in <code>.env</code> — <code>TTS_PROVIDER=elevenlabs</code> and <code>ELEVENLABS_API_KEY=…</code> — then restart. The key you already use elsewhere works; nothing else changes.</div></div>`
+    : `<div class="row" style="gap:12px;align-items:flex-end;flex-wrap:wrap">
+        <div class="field" style="min-width:260px"><label>Voice (${esc(prov)})</label><select id="voice">${(voices ? voices.voices : []).map((v) => `<option value="${attr(v.id)}" ${vform.voice_id === v.id ? 'selected' : ''}>${esc(v.name)}${v.languages && v.languages.length ? ' · ' + esc(v.languages.slice(0, 3).join('/')) : ''}</option>`).join('') || '<option value="">loading…</option>'}</select></div>
+        <button class="btn filled" id="speak">${icon('mic')}${vo ? 'Speak it again' : 'Speak the script'}</button>
+        <label class="check"><input type="checkbox" id="fitscenes" checked> stretch a scene if its line is longer</label>
+        <span class="muted body-s grow" id="vmsg">${vo ? `${vo.scenes.length} lines · ${mins(vo.seconds)} of audio · ${num(vo.chars)} characters used` : 'Each scene is spoken separately, so the voice stays inside its own shot.'}</span>
+        ${voices && voices.usage && voices.usage.limit ? `<span class="tag" title="characters used on this ElevenLabs key">${num(voices.usage.used)} / ${num(voices.usage.limit)}</span>` : ''}</div>
+      ${(vo && vo.warnings && vo.warnings.length) ? `<div class="banner warn" style="margin-top:12px">${icon('info')}<div>${vo.warnings.map(esc).join('<br>')}</div></div>` : ''}
+      ${vo ? `<audio controls preload="none" style="width:100%;margin-top:12px" src="/api/v1/scripts/${esc(s.id)}/audio/${vo.scenes[0].n}" title="scene 1"></audio>` : ''}`;
+
+  const withFootage = (s.scenes || []).filter((x) => x.b_roll_block_id || x.b_roll_image_id).length;
+  const videoBox = !opts.composer
+    ? `<div class="banner warn">${icon('info')}<div>The video composer is off — set <code>COMPOSER_ENABLED=true</code> to cut the script together here.</div></div>`
+    : `<div class="row" style="gap:12px;align-items:flex-end;flex-wrap:wrap">
+        <div class="field" style="min-width:150px"><label>Format</label><select id="vpreset">${[['reels', 'Reel 9:16'], ['square', 'Square 1:1'], ['landscape', 'YouTube 16:9']].map(([k, l]) => `<option value="${k}" ${vform.preset === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="field" style="min-width:170px"><label>Template</label><select id="vtpl">${(templates || []).map((t) => `<option value="${attr(t.name || t)}" ${vform.template === (t.name || t) ? 'selected' : ''}>${esc(t.name || t)}</option>`).join('') || '<option value="">the default</option>'}</select></div>
+        <div class="field" style="min-width:210px"><label>Sound</label><select id="vaudio">${[['voiceover', 'the voiceover only'], ['both', 'voiceover over the original sound'], ['source', "the footage's own sound"]].map(([k, l]) => `<option value="${k}" ${vform.audio === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <button class="btn filled" id="makevid" ${(!vo && vform.audio !== 'source') ? 'disabled title="speak the script first, or choose the footage&apos;s own sound"' : ''}>${icon('movie')}Make the video</button>
+        <span class="muted body-s grow">${withFootage} of ${(s.scenes || []).length} scenes have footage or a still; the rest become a slate you can reshoot later. Rendered with the branded template, like a reel.</span></div>
+      <div id="vlist" style="margin-top:14px">${videoList()}</div>`;
+
+  return `<div class="bd"><div class="overline">Voiceover</div><div style="margin-top:10px">${voiceBox}</div>
+    <div class="overline" style="margin-top:26px">The video</div><div style="margin-top:10px">${videoBox}</div></div>`;
+}
+
+function videoList() {
+  if (!videos.length) return '<div class="muted body-s">No video yet.</div>';
+  return videos.map((v) => {
+    const busy = v.status === 'QUEUED' || v.status === 'RENDERING';
+    const prog = v.progress ? ` · scene ${v.progress.scene} of ${v.progress.of}` : '';
+    return `<div class="evb"><div class="row"><span class="tag ${v.status === 'DONE' ? 'ok' : v.status === 'FAILED' ? 'err' : 'pending'}">${esc(v.status.toLowerCase())}${esc(prog)}</span>
+      <b>${esc(v.preset)}</b><span class="muted body-s">${v.duration ? v.duration.toFixed(1) + 's' : ''} ${v.size_bytes ? '· ' + (v.size_bytes / 1e6).toFixed(1) + ' MB' : ''} · ${esc(v.audio || '')} · ${ago(v.created_at)}</span>
+      <span class="sp"></span>${v.url ? `<a class="btn xs" href="${attr(v.url)}?download=true" download>${icon('download', 's')}Download</a><a class="btn xs" href="#composer" title="open the studio">${icon('movie', 's')}Studio</a>` : ''}</div>
+      ${busy ? '<div class="progress" style="margin-top:8px"></div>' : ''}
+      ${v.error ? `<div class="banner err" style="margin-top:8px">${icon('warn')}<div class="mono">${esc(v.error)}</div></div>` : ''}
+      ${(v.warnings || []).length ? `<div class="muted body-s" style="margin-top:6px">${v.warnings.map(esc).join(' · ')}</div>` : ''}
+      ${v.url ? `<video controls preload="none" poster="${attr(v.poster || '')}" src="${attr(v.url)}" style="margin-top:10px;max-height:460px;border-radius:var(--r);background:#000"></video>` : ''}</div>`;
+  }).join('');
+}
+
+function bindVoiceVideo(el, s) {
+  const voiceSel = el.querySelector('#voice');
+  if (voiceSel && !voices) loadVoices();
+  if (opts.composer && templates === null) api('/composer/templates').then((t) => { templates = t; if (!vform.template && t.length) vform.template = t[0].name || t[0]; if (tab === 'video') drawScript(); }).catch(() => { templates = []; });
+  const tp = el.querySelector('#vtpl'); if (tp) tp.onchange = () => { vform.template = tp.value; };
+  if (voiceSel) voiceSel.onchange = () => { vform.voice_id = voiceSel.value; };
+  const speak = el.querySelector('#speak');
+  if (speak) speak.onclick = async () => {
+    const msg = el.querySelector('#vmsg');
+    speak.disabled = true; msg.textContent = 'Speaking every scene… this takes a few seconds per line.';
+    try {
+      script = await post(`/scripts/${s.id}/voiceover`, { voice_id: voiceSel ? voiceSel.value : null, fit_scenes: el.querySelector('#fitscenes').checked });
+      toast('Voiceover ready — saved as v' + script.version); listSig = ''; drawScript();
+    } catch (e) { msg.textContent = e.message; toast(e.message, true); speak.disabled = false; }
+  };
+  const mk = el.querySelector('#makevid');
+  if (mk) mk.onclick = async () => {
+    mk.disabled = true;
+    try {
+      const r = await post(`/scripts/${s.id}/video`, { preset: el.querySelector('#vpreset').value, audio: el.querySelector('#vaudio').value,
+        template: (el.querySelector('#vtpl') || {}).value || null });
+      toast(`Rendering ${r.scenes} scenes (${Math.round(r.seconds)}s)…`);
+      if (r.warnings && r.warnings.length) toast(r.warnings[0], true);
+      await pollVideos(s.id, true);
+    } catch (e) { toast(e.message, true); mk.disabled = false; }
+  };
+  const pr = el.querySelector('#vpreset'); if (pr) pr.onchange = () => { vform.preset = pr.value; };
+  const au = el.querySelector('#vaudio'); if (au) au.onchange = () => { vform.audio = au.value; drawScript(); };
+  pollVideos(s.id, false);
+}
+
+async function loadVoices() {
+  try { voices = await api('/tts/voices'); if (!vform.voice_id) vform.voice_id = voices.default || (voices.voices[0] || {}).id || ''; if (tab === 'video') drawScript(); }
+  catch (e) { voices = { voices: [], usage: {} }; toast(e.message, true); }
+}
+
+async function pollVideos(sid, force) {
+  clearTimeout(videoT);
+  try { videos = await api(`/scripts/${sid}/video`); } catch { videos = []; }
+  const box = root && root.querySelector('#vlist');
+  if (box) box.innerHTML = videoList();
+  else if (force) drawScript();
+  if (videos.some((v) => v.status === 'QUEUED' || v.status === 'RENDERING')) videoT = setTimeout(() => pollVideos(sid, false), 2500);
+  else if (force) drawScript();
 }

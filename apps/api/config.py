@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     stt_provider: str = "browser"     # how the mic turns speech into text: browser (Chrome speech API) | whisper (local, later)
     stt_language: str = "hi-IN"       # dictation language the mic starts in
 
+    # ---- voiceover (script -> spoken audio -> laid over the rendered video)
+    tts_provider: str = "none"        # none | elevenlabs | mock
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = ""     # default voice; the page can pick another from the account
+    elevenlabs_model: str = "eleven_multilingual_v2"   # Hindi, Hinglish and English on one model
+    elevenlabs_speed: float = 1.0
+
     # upload proxies: raw camera files are shrunk (720p H.264) before they go to Gemini. Cost is per second of video,
     # not per byte, so nothing is lost; files over 2 GB can't be uploaded at all without this.
     proxy_enabled: bool = True
@@ -113,6 +120,10 @@ class Settings(BaseSettings):
         return self.data_dir / "analyses"
 
     @property
+    def voiceovers_dir(self) -> Path:
+        return self.data_dir / "voiceovers"
+
+    @property
     def allowed_roots(self) -> list[Path]:
         roots = []
         for raw in f"{self.nas_allowed_roots},{self.watch_roots}".split(","):
@@ -151,7 +162,7 @@ class Settings(BaseSettings):
         return self.ai_provider
 
     def ensure_dirs(self) -> None:
-        for d in (self.uploads_dir, self.jobs_dir, self.analyses_dir, self.proxies_dir):
+        for d in (self.uploads_dir, self.jobs_dir, self.analyses_dir, self.proxies_dir, self.voiceovers_dir):
             d.mkdir(parents=True, exist_ok=True)
         for d in self.allowed_roots:   # NAS mounts may be read-only or not connected yet: never fatal, the watcher skips missing roots
             try:

@@ -31,6 +31,7 @@ from apps.api.script_routes import router as script_router
 from services.retrieval.retriever import Retriever
 from agents.blog_agent.agent import BlogAgent
 from agents.script_agent.agent import ScriptAgent
+from services.tts import build_tts
 
 WEB_DIR = REPO_ROOT / "web"
 
@@ -95,6 +96,7 @@ async def lifespan(app: FastAPI):
     app.state.blog_agent = blog_agent
     app.state.scripts = scripts
     app.state.script_agent = script_agent
+    app.state.tts = build_tts(settings)
     app.state.watcher = _build_watcher(app, settings)
     app.state.watcher.start()
     log.info("provider=%s model=%s embedder=%s/%s store=%s jobs_loaded=%d data_dir=%s watcher=%s auto_draft=%s", provider.name, provider.model,

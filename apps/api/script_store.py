@@ -137,7 +137,8 @@ class ScriptStore:
         return self.get(sid)
 
     def update(self, sid: str, *, title: str | None = None, hook: str | None = None, cta: str | None = None, caption: str | None = None,
-               scenes: list[dict] | None = None, hashtags: list[str] | None = None, edited_by: str = "editor") -> Script:
+               scenes: list[dict] | None = None, hashtags: list[str] | None = None, extras: dict[str, Any] | None = None,
+               edited_by: str = "editor") -> Script:
         """Editor change: the previous scenes are kept, the version bumps and the script goes back to 'in review'."""
         with self.pool.connection() as conn, conn.transaction():
             conn.execute(
@@ -146,10 +147,11 @@ class ScriptStore:
             )
             conn.execute(
                 """UPDATE scripts SET title = COALESCE(%s, title), hook = COALESCE(%s, hook), cta = COALESCE(%s, cta), caption = COALESCE(%s, caption),
-                          scenes = COALESCE(%s, scenes), hashtags = COALESCE(%s, hashtags), version = version + 1,
+                          scenes = COALESCE(%s, scenes), hashtags = COALESCE(%s, hashtags), extras = COALESCE(%s, extras), version = version + 1,
                           status = CASE WHEN status IN ('new', 'in_review') THEN 'in_review' ELSE status END, updated_at = %s
                    WHERE id = %s""",
-                (title, hook, cta, caption, Jsonb(scenes) if scenes is not None else None, Jsonb(hashtags) if hashtags is not None else None, _now(), sid),
+                (title, hook, cta, caption, Jsonb(scenes) if scenes is not None else None, Jsonb(hashtags) if hashtags is not None else None,
+                 Jsonb(extras) if extras is not None else None, _now(), sid),
             )
             conn.execute(
                 "INSERT INTO script_versions (script_id, version, title, scenes, edited_by) SELECT id, version, title, scenes, %s FROM scripts WHERE id = %s",

@@ -41,7 +41,9 @@ clearly labelled `[MOCK]`) so the pipeline can be exercised offline.
 | `GET` | `/api/v1/system` | provider/model/store/config in use |
 | `GET/POST` | `/api/v1/opportunities`, `…/{id}/status` | content-opportunity queue (AI-proposed per video, or manual); accept / dismiss |
 | `POST/GET` | `/api/v1/scripts`, `…/{id}`, `…/{id}/regenerate`, `…/{id}/status`, `…/{id}/export` | Script Writer: idea (typed or dictated) → timed scenes; edit, rewrite, approve, download |
-| `GET` | `/api/v1/script-options` | languages, styles, lengths (with word budgets) and the dictation provider |
+| `GET` | `/api/v1/script-options` | languages, styles, lengths (with word budgets), dictation + voiceover providers |
+| `POST` | `/api/v1/scripts/{id}/voiceover`, `…/{id}/video` | speak the script (ElevenLabs) · cut it together as a branded video |
+| `GET` | `/api/v1/tts/voices` | the voices on the ElevenLabs key, with the characters left |
 | `POST` | `/api/v1/drafts` | `{opportunity_id}` or `{brief}` (+ `job_id`, `depth`, `include_images`) → Blog Agent runs in the background (202) |
 | `PUT` | `/api/v1/drafts/{id}/images` | editor sets the hero / inline pictures (new version) |
 | `POST/GET` | `/api/v1/jobs/{id}/frames` · `/api/v1/images?job_id=&kind=` · `/api/v1/images/{id}` | frames from a video, image list, image file |
@@ -180,6 +182,22 @@ video (space = start/stop, A± = size). Approve / reject like drafts; every edit
 (`scripts`, `script_versions`), and `GET /api/v1/scripts/{id}/export?format=md|txt` downloads the shooting script or the
 plain voiceover. The prompt is `script_v1` in the registry, so the viral formula is tunable from **Prompts**.
 Live 30 s Hindi reel from the CIMAGE library: 5 scenes, 65 words, all Devanagari, 4 cited blocks, 5 real stills, ₹0.3.
+
+**Voiceover (ElevenLabs).** `POST /api/v1/scripts/{id}/voiceover {voice_id?, fit_scenes}` speaks **each scene separately**
+(`eleven_multilingual_v2`, so Devanagari Hindi, Hinglish and English all work) into `data/voiceovers/<script>/scene_NNN.mp3`.
+Every line's real duration is measured, compared with the scene it belongs to, and a scene that is too short is stretched
+to fit (a versioned edit, like any other). `GET /api/v1/tts/voices` lists the account's voices and the characters left on
+the key. Set `TTS_PROVIDER=elevenlabs` + `ELEVENLABS_API_KEY`; `mock` writes silence of the right length for tests.
+
+**Script → finished video.** `POST /api/v1/scripts/{id}/video {preset, template, audio}` cuts the script together with the
+*same* reel machinery: each scene becomes one branded segment — the video moment its `b_roll_block_id` points at (job +
+timestamp, trimmed so it never runs past the end), the still from `b_roll_image_id` with a slow push-in, or a brand slate
+when nothing has been shot yet — rendered through `render()` with the template frame and the on-screen text as its caption.
+The segments are concatenated by stream copy (same preset, template and encoder settings) and the voiceover is laid over
+the result, each line inside its own scene so the voice stays in sync; `audio` picks voiceover only, voiceover over ducked
+source, or the footage's own sound. It runs on the composer's render queue, so it appears in the Reels studio and streams
+from `/api/v1/renders/{id}/video` like any other render, with per-scene progress while it works. A 33 s 1080×1920 reel out
+of a five-scene Hindi script took 40 s to render on the dev Mac.
 
 ## Folder watcher + auto-draft + admin panel (V0.4 / V0.6 / V0.8)
 
