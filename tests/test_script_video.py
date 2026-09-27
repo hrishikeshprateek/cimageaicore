@@ -99,6 +99,11 @@ def test_voiceover_and_video_through_the_api(pg_app_video, tiny_video: Path):  #
     assert v["version"] == s["version"] + 1                                    # generating a voiceover is a versioned edit
     assert all(sc["seconds"] >= next(x["seconds"] for x in vo["scenes"] if x["n"] == sc["n"]) for sc in v["scenes"])   # scenes fit their lines
     assert client.get(f"/api/v1/scripts/{sid}/audio/1").headers["content-type"] == "audio/mpeg"
+
+    # a voice id the key does not have (a page left open through a config change) falls back instead of failing
+    bad = client.post(f"/api/v1/scripts/{sid}/voiceover", json={"voice_id": "gone-voice", "scenes": [1]}).json()
+    vo1 = bad["extras"]["voiceover"]
+    assert vo1["voice_id"] == "mock-voice" and any("not a voice on this key" in w for w in vo1["warnings"])
     assert client.get(f"/api/v1/scripts/{sid}/audio/99").status_code == 404
 
     r = client.post(f"/api/v1/scripts/{sid}/video", json={"preset": "reels", "audio": "voiceover"})

@@ -350,7 +350,7 @@ function videoList() {
 
 function bindVoiceVideo(el, s) {
   const voiceSel = el.querySelector('#voice');
-  if (voiceSel && !voices) loadVoices();
+  if (voiceSel && (!voices || Date.now() - (voices.at || 0) > 60000 || voices.provider !== (opts.voiceover && opts.voiceover.provider))) loadVoices();
   if (opts.composer && templates === null) api('/composer/templates').then((t) => { templates = t; if (!vform.template && t.length) vform.template = t[0].name || t[0]; if (tab === 'video') drawScript(); }).catch(() => { templates = []; });
   const tp = el.querySelector('#vtpl'); if (tp) tp.onchange = () => { vform.template = tp.value; };
   if (voiceSel) voiceSel.onchange = () => { vform.voice_id = voiceSel.value; };
@@ -359,9 +359,9 @@ function bindVoiceVideo(el, s) {
     const msg = el.querySelector('#vmsg');
     speak.disabled = true; msg.textContent = 'Speaking every scene… this takes a few seconds per line.';
     try {
-      script = await post(`/scripts/${s.id}/voiceover`, { voice_id: voiceSel ? voiceSel.value : null, fit_scenes: el.querySelector('#fitscenes').checked });
+      script = await post(`/scripts/${s.id}/voiceover`, { voice_id: (voiceSel && voiceSel.value) || null, fit_scenes: el.querySelector('#fitscenes').checked });
       toast('Voiceover ready — saved as v' + script.version); listSig = ''; drawScript();
-    } catch (e) { msg.textContent = e.message; toast(e.message, true); speak.disabled = false; }
+    } catch (e) { voices = null; msg.textContent = e.message; toast(e.message, true); speak.disabled = false; loadVoices(); }
   };
   const mk = el.querySelector('#makevid');
   if (mk) mk.onclick = async () => {
@@ -380,8 +380,13 @@ function bindVoiceVideo(el, s) {
 }
 
 async function loadVoices() {
-  try { voices = await api('/tts/voices'); if (!vform.voice_id) vform.voice_id = voices.default || (voices.voices[0] || {}).id || ''; if (tab === 'video') drawScript(); }
-  catch (e) { voices = { voices: [], usage: {} }; toast(e.message, true); }
+  try {
+    const v = await api('/tts/voices'); v.at = Date.now(); voices = v;
+    const ids = new Set(v.voices.map((x) => x.id));
+    const used = (script && script.extras && script.extras.voiceover || {}).voice_id;
+    if (!ids.has(vform.voice_id)) vform.voice_id = (ids.has(used) && used) || v.default || (v.voices[0] || {}).id || '';
+    if (tab === 'video') drawScript();
+  } catch (e) { voices = { voices: [], usage: {}, at: Date.now() }; toast(e.message, true); }
 }
 
 async function pollVideos(sid, force) {

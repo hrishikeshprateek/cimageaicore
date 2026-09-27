@@ -260,6 +260,24 @@ def tts_voices(request: Request) -> dict[str, Any]:
     return {"provider": t.name, "voices": voices, "usage": t.usage(), "default": request.app.state.settings.elevenlabs_voice_id or (voices[0]["id"] if voices else "")}
 
 
+def _resolve_voice(request: Request, tts, asked: str | None) -> tuple[str, dict[str, Any]]:
+    """A voice id the account does not have (a stale page, a copied config) must not fail the whole script:
+    fall back to the configured voice and say so."""
+    default = (request.app.state.settings.elevenlabs_voice_id or "").strip()
+    asked = (asked or "").strip()
+    try:
+        known = {v.id: v.name for v in tts.voices()}
+    except TTSError:
+        known = {}
+    if asked and (not known or asked in known):
+        return asked, {"name": known.get(asked)}
+    pick = default if default in known else (next(iter(known), "") if known else default)
+    if not pick:
+        raise HTTPException(400, "no voice available on this ElevenLabs key - pick one in the page")
+    note = f"'{asked}' is not a voice on this key - used {known.get(pick, pick)} instead" if asked else ""
+    return pick, {"name": known.get(pick), "note": note}
+
+
 class VoiceoverBody(BaseModel):
     voice_id: str | None = None
     scenes: list[int] | None = Field(default=None, description="only these scene numbers; default = the whole script")
@@ -276,7 +294,7 @@ def make_voiceover(request: Request, sid: str, body: VoiceoverBody) -> dict[str,
         raise HTTPException(404, "script not found")
     if sc.status == "generating":
         raise HTTPException(409, "the writer is still working on this script")
-    voice_id = (body.voice_id or request.app.state.settings.elevenlabs_voice_id or "").strip()
+    voice_id, voice_note = _resolve_voice(request, tts, body.voice_id)
     out_dir = _voice_dir(request, sid)
     wanted = set(body.scenes or [])
     existing = {int(x["n"]): x for x in ((sc.extras.get("voiceover") or {}).get("scenes") or [])}
@@ -308,8 +326,9 @@ def make_voiceover(request: Request, sid: str, body: VoiceoverBody) -> dict[str,
         scenes = [{**s, "seconds": max(float(s.get("seconds") or 0), by_scene[int(s.get("n") or 0)]["seconds"] + 0.3)} if int(s.get("n") or 0) in by_scene else s
                   for s in sc.scenes]
         warnings = [w + " - the scene was stretched to fit" for w in warnings]
-    vo = {"provider": tts.name, "voice_id": voice_id, "scenes": lines, "seconds": round(sum(x["seconds"] for x in lines), 2),
-          "chars": sum(x["chars"] for x in lines), "warnings": warnings, "made_at": _now_iso()}
+    vo = {"provider": tts.name, "voice_id": voice_id, "voice_name": voice_note.get("name"), "scenes": lines,
+          "seconds": round(sum(x["seconds"] for x in lines), 2), "chars": sum(x["chars"] for x in lines),
+          "warnings": ([voice_note["note"]] if voice_note.get("note") else []) + warnings, "made_at": _now_iso()}
     out = store.update(sid, scenes=scenes, extras={**sc.extras, "voiceover": vo}, edited_by="editor:voiceover")
     request.app.state.store.audit("editor", "script.voiceover", "script", sid, {"scenes": len(lines), "chars": spent, "voice": voice_id, "provider": tts.name})
     return {**out.model_dump(mode="json"), "planned_seconds": out.planned_seconds, "words": out.words}
