@@ -6,7 +6,7 @@ export const title = 'Script writer';
 export const subtitle = 'speak or type an idea — the script comes back timed, in Hindi or English, from our own footage';
 
 let root, ctx, opts = null, scripts = [], sel = null, script = null, tab = 'scenes', listSig = '', dirty = false, jobs = [];
-let voices = null, templates = null, videos = [], videoT = null, vform = { preset: 'reels', audio: 'voiceover', voice_id: '', template: '' };
+let voices = null, templates = null, videos = [], videoT = null, voiceT = null, vform = { preset: 'reels', audio: 'voiceover', voice_id: '', template: '' };
 let form = { language: 'hi', seconds: 30, style: 'viral_reel', job_id: '', idea: '' };
 let rec = null;   // live dictation session
 const sigOf = (ss) => JSON.stringify([sel, ss.map((s) => [s.id, s.status, s.version, s.title])]);
@@ -15,7 +15,7 @@ const lenLabel = (n) => (n < 120 ? `${n}s` : `${Math.round(n / 60)} min`);
 
 export async function render(el, params, c) {
   root = el; ctx = c; sel = params[0] || sel; script = null; tab = 'scenes'; listSig = '';
-  if (!opts) opts = await api('/script-options').catch(() => null);
+  opts = await api('/script-options').catch(() => opts);
   if (!jobs.length) jobs = await api('/jobs').then((js) => js.filter((j) => j.block_counts && Object.keys(j.block_counts).length)).catch(() => []);
   await draw(true);
 }
@@ -26,7 +26,7 @@ export async function tick() {
   if (sigOf(ss) === listSig && !writing) return;
   await draw(writing);
 }
-export function destroy() { stopDictation(); clearTimeout(videoT); root = null; }
+export function destroy() { stopDictation(); clearTimeout(videoT); clearTimeout(voiceT); root = null; }
 
 async function draw(force) {
   if (!opts || !opts.available) { root.innerHTML = `<div class="card"><div class="bd">${emptyState('movie', 'The script writer needs PostgreSQL', 'set DATABASE_URL and restart')}</div></div>`; return; }
@@ -307,16 +307,22 @@ function teleprompter(s) {
 function voiceVideoTab(s, vo) {
   const prov = opts.voiceover && opts.voiceover.provider;
   const mins = (n) => `${Math.floor(n / 60)}:${String(Math.round(n % 60)).padStart(2, '0')}`;
+  const speaking = vo && vo.status === 'speaking';
+  const ready = vo && vo.scenes && vo.scenes.length && vo.status !== 'speaking';
   const voiceBox = !prov
-    ? `<div class="banner warn">${icon('info')}<div><b>Voiceovers are off.</b> Put your ElevenLabs key in <code>.env</code> — <code>TTS_PROVIDER=elevenlabs</code> and <code>ELEVENLABS_API_KEY=…</code> — then restart. The key you already use elsewhere works; nothing else changes.</div></div>`
+    ? `<div class="banner warn">${icon('info')}<div><b>Voiceovers are off.</b> Put your ElevenLabs key in <code>.env</code> — <code>TTS_PROVIDER=elevenlabs</code> and <code>ELEVENLABS_API_KEY=…</code> — then restart.</div></div>`
     : `<div class="row" style="gap:12px;align-items:flex-end;flex-wrap:wrap">
-        <div class="field" style="min-width:260px"><label>Voice (${esc(prov)})</label><select id="voice">${(voices ? voices.voices : []).map((v) => `<option value="${attr(v.id)}" ${vform.voice_id === v.id ? 'selected' : ''}>${esc(v.name)}${v.languages && v.languages.length ? ' · ' + esc(v.languages.slice(0, 3).join('/')) : ''}</option>`).join('') || '<option value="">loading…</option>'}</select></div>
-        <button class="btn filled" id="speak">${icon('mic')}${vo ? 'Speak it again' : 'Speak the script'}</button>
+        <div class="field" style="min-width:280px"><label>Voice <span class="tag ${prov === 'mock' ? 'warn' : 'ok'}">${esc(prov)}${prov === 'mock' ? ' — silent test audio' : ''}</span></label>
+          <select id="voice" ${speaking ? 'disabled' : ''}>${(voices ? voices.voices : []).map((v) => `<option value="${attr(v.id)}" ${vform.voice_id === v.id ? 'selected' : ''}>${esc(v.name)}${v.languages && v.languages.length ? ' · ' + esc(v.languages.slice(0, 3).join('/')) : ''}</option>`).join('') || `<option value="${attr((vo && vo.voice_id) || '')}">${esc((vo && vo.voice_name) || 'loading the voices on your key…')}</option>`}</select></div>
+        <button class="btn filled" id="speak" ${speaking ? 'disabled' : ''}>${icon('mic')}${speaking ? 'Speaking…' : (ready ? 'Speak it again' : 'Speak the script')}</button>
         <label class="check"><input type="checkbox" id="fitscenes" checked> stretch a scene if its line is longer</label>
-        <span class="muted body-s grow" id="vmsg">${vo ? `${vo.scenes.length} lines · ${mins(vo.seconds)} of audio · ${num(vo.chars)} characters used` : 'Each scene is spoken separately, so the voice stays inside its own shot.'}</span>
+        <label class="check" title="lines already spoken in this voice are reused, so a retry costs nothing"><input type="checkbox" id="forcevo"> say every line again</label>
+        <span class="muted body-s grow" id="vmsg">${speaking ? `Speaking line ${vo.done || 0} of ${vo.total || '?'}…` : ready ? `${vo.scenes.length} lines · ${mins(vo.seconds)} of audio · ${num(vo.chars)} characters${vo.voice_name ? ' · ' + esc(vo.voice_name) : ''}` : 'Each scene is spoken separately, so the voice stays inside its own shot.'}</span>
         ${voices && voices.usage && voices.usage.limit ? `<span class="tag" title="characters used on this ElevenLabs key">${num(voices.usage.used)} / ${num(voices.usage.limit)}</span>` : ''}</div>
+      ${speaking ? `<div class="progress" style="margin-top:10px"></div>` : ''}
+      ${(vo && vo.error) ? `<div class="banner err" style="margin-top:12px">${icon('warn')}<div class="mono">${esc(vo.error)}</div></div>` : ''}
       ${(vo && vo.warnings && vo.warnings.length) ? `<div class="banner warn" style="margin-top:12px">${icon('info')}<div>${vo.warnings.map(esc).join('<br>')}</div></div>` : ''}
-      ${vo ? `<audio controls preload="none" style="width:100%;margin-top:12px" src="/api/v1/scripts/${esc(s.id)}/audio/${vo.scenes[0].n}" title="scene 1"></audio>` : ''}`;
+      ${ready ? `<div class="row" style="margin-top:12px;gap:10px"><audio controls preload="none" style="flex:1;min-width:260px" src="/api/v1/scripts/${esc(s.id)}/audio/full?v=${vo.scenes.length}-${Math.round(vo.seconds)}"></audio><span class="muted body-s">the whole voiceover, each line in its own scene</span></div>` : ''}`;
 
   const withFootage = (s.scenes || []).filter((x) => x.b_roll_block_id || x.b_roll_image_id).length;
   const videoBox = !opts.composer
@@ -357,12 +363,15 @@ function bindVoiceVideo(el, s) {
   const speak = el.querySelector('#speak');
   if (speak) speak.onclick = async () => {
     const msg = el.querySelector('#vmsg');
-    speak.disabled = true; msg.textContent = 'Speaking every scene… this takes a few seconds per line.';
+    speak.disabled = true; msg.textContent = 'Starting…';
     try {
-      script = await post(`/scripts/${s.id}/voiceover`, { voice_id: (voiceSel && voiceSel.value) || null, fit_scenes: el.querySelector('#fitscenes').checked });
-      toast('Voiceover ready — saved as v' + script.version); listSig = ''; drawScript();
+      const r = await post(`/scripts/${s.id}/voiceover`, { voice_id: (voiceSel && voiceSel.value) || null,
+        fit_scenes: el.querySelector('#fitscenes').checked, force: el.querySelector('#forcevo').checked });
+      toast(`Speaking with ${r.voice_name || r.voice_id}…`);
+      followVoiceover(s.id);
     } catch (e) { voices = null; msg.textContent = e.message; toast(e.message, true); speak.disabled = false; loadVoices(); }
   };
+  if ((script.extras && script.extras.voiceover || {}).status === 'speaking') followVoiceover(s.id);
   const mk = el.querySelector('#makevid');
   if (mk) mk.onclick = async () => {
     mk.disabled = true;
@@ -387,6 +396,17 @@ async function loadVoices() {
     if (!ids.has(vform.voice_id)) vform.voice_id = (ids.has(used) && used) || v.default || (v.voices[0] || {}).id || '';
     if (tab === 'video') drawScript();
   } catch (e) { voices = { voices: [], usage: {}, at: Date.now() }; toast(e.message, true); }
+}
+
+async function followVoiceover(sid) {
+  clearTimeout(voiceT);
+  try { script = await api('/scripts/' + sid); } catch { return; }
+  const vo = (script.extras || {}).voiceover || {};
+  if (tab === 'video') drawScript();
+  if (vo.status === 'speaking') { voiceT = setTimeout(() => followVoiceover(sid), 1500); return; }
+  listSig = '';
+  if (vo.status === 'failed') toast(vo.error || 'the voiceover failed', true);
+  else if (vo.scenes && vo.scenes.length) toast(`Voiceover ready — ${vo.scenes.length} lines, ${Math.round(vo.seconds)}s`);
 }
 
 async function pollVideos(sid, force) {

@@ -92,16 +92,24 @@ def test_voiceover_and_video_through_the_api(pg_app_video, tiny_video: Path):  #
     # a video needs a voiceover (or the footage's own sound)
     assert client.post(f"/api/v1/scripts/{sid}/video", json={}).status_code == 400
 
-    v = client.post(f"/api/v1/scripts/{sid}/voiceover", json={"voice_id": "mock-voice"}).json()
+    started = client.post(f"/api/v1/scripts/{sid}/voiceover", json={"voice_id": "mock-voice"})
+    assert started.status_code == 202 and started.json()["status"] == "speaking"     # spoken in the background, line by line
+    v = _wait_voiceover(client, sid)
     vo = v["extras"]["voiceover"]
     assert vo["provider"] == "mock" and len(vo["scenes"]) == len(s["scenes"]) and vo["seconds"] > 0
     assert all(Path(x["path"]).exists() for x in vo["scenes"])
     assert v["version"] == s["version"] + 1                                    # generating a voiceover is a versioned edit
     assert all(sc["seconds"] >= next(x["seconds"] for x in vo["scenes"] if x["n"] == sc["n"]) for sc in v["scenes"])   # scenes fit their lines
     assert client.get(f"/api/v1/scripts/{sid}/audio/1").headers["content-type"] == "audio/mpeg"
+    assert client.get(f"/api/v1/scripts/{sid}/audio/full").headers["content-type"] == "audio/mp4"   # the whole track, scene by scene
+
+    # saying it again reuses every line that has not changed - a retry costs no credits
+    before = {x["n"]: x["path"] for x in vo["scenes"]}
+    again = _wait_voiceover(client, sid, start=lambda: client.post(f"/api/v1/scripts/{sid}/voiceover", json={"voice_id": "mock-voice"}))
+    assert {x["n"]: x["path"] for x in again["extras"]["voiceover"]["scenes"]} == before
 
     # a voice id the key does not have (a page left open through a config change) falls back instead of failing
-    bad = client.post(f"/api/v1/scripts/{sid}/voiceover", json={"voice_id": "gone-voice", "scenes": [1]}).json()
+    bad = _wait_voiceover(client, sid, start=lambda: client.post(f"/api/v1/scripts/{sid}/voiceover", json={"voice_id": "gone-voice", "scenes": [1]}))
     vo1 = bad["extras"]["voiceover"]
     assert vo1["voice_id"] == "mock-voice" and any("not a voice on this key" in w for w in vo1["warnings"])
     assert client.get(f"/api/v1/scripts/{sid}/audio/99").status_code == 404
@@ -123,6 +131,20 @@ def test_voiceover_and_video_through_the_api(pg_app_video, tiny_video: Path):  #
 
     listed = client.get(f"/api/v1/scripts/{sid}/video").json()
     assert [x["id"] for x in listed] == [rid] and listed[0]["url"].endswith("/video")
+
+
+def _wait_voiceover(client, sid, start=None, timeout=60):
+    """Kick off (or just follow) a background voiceover and return the script once it is done."""
+    if start is not None:
+        assert start().status_code == 202
+    for _ in range(int(timeout / 0.2)):
+        d = client.get(f"/api/v1/scripts/{sid}").json()
+        vo = (d.get("extras") or {}).get("voiceover") or {}
+        if vo.get("status") and vo["status"] != "speaking":
+            assert vo["status"] == "ready", vo.get("error")
+            return d
+        time.sleep(0.2)
+    raise AssertionError("voiceover did not finish")
 
 
 @pytest.fixture

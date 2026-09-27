@@ -159,6 +159,12 @@ class ScriptStore:
             )
         return self.get(sid)
 
+    def set_extras(self, sid: str, extras: dict[str, Any]) -> Script:
+        """Progress / voiceover bookkeeping: no version bump, no status change - it is not an edit of the script."""
+        with self.pool.connection() as conn, conn.transaction():
+            conn.execute("UPDATE scripts SET extras = %s, updated_at = %s WHERE id = %s", (Jsonb(extras), _now(), sid))
+        return self.get(sid)
+
     def set_status(self, sid: str, status: ScriptStatus) -> Script:
         with self.pool.connection() as conn, conn.transaction():
             conn.execute("UPDATE scripts SET status = %s, updated_at = %s WHERE id = %s", (status, _now(), sid))

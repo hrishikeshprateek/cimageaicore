@@ -282,11 +282,65 @@ class VoiceoverBody(BaseModel):
     voice_id: str | None = None
     scenes: list[int] | None = Field(default=None, description="only these scene numbers; default = the whole script")
     fit_scenes: bool = Field(default=True, description="stretch a scene that is shorter than its spoken line")
+    force: bool = Field(default=False, description="speak lines again even when the same words were already spoken in this voice")
 
 
-@router.post("/scripts/{sid}/voiceover")
+def _speak_script(state, sid: str, *, voice_id: str, voice_name: str | None, note: str, wanted: set[int], fit_scenes: bool, force: bool) -> None:
+    """Speak the script line by line in the background: a long script keeps no browser waiting, every finished line is
+    saved immediately (a restart or a closed tab loses nothing), and a line already spoken in this voice is reused."""
+    store: ScriptStore = state.scripts
+    tts = state.tts
+    sc = store.get(sid)
+    out_dir = state.settings.voiceovers_dir / sid
+    out_dir.mkdir(parents=True, exist_ok=True)
+    have = {int(x["n"]): x for x in ((sc.extras.get("voiceover") or {}).get("scenes") or [])}
+    todo = [s for s in sc.scenes if (s.get("voiceover") or "").strip() and (not wanted or int(s.get("n") or 0) in wanted)]
+    vo = {**(sc.extras.get("voiceover") or {}), "provider": tts.name, "voice_id": voice_id, "voice_name": voice_name, "status": "speaking",
+          "done": 0, "total": len(todo), "scenes": list(have.values()), "warnings": ([note] if note else []), "made_at": _now_iso(), "error": None}
+    lines: dict[int, dict] = dict(have)
+    spent = 0
+    try:
+        for i, scene in enumerate(todo, start=1):
+            n = int(scene.get("n") or 0)
+            text = (scene.get("voiceover") or "").strip()
+            path = out_dir / f"scene_{n:03d}.mp3"
+            old = have.get(n)
+            if not force and old and old.get("text") == text and old.get("voice_id", voice_id) == voice_id and path.exists():
+                lines[n] = {**old, "path": str(path)}            # same words, same voice: no new credits
+            else:
+                tts.speak(text, path, voice_id=voice_id or None)
+                spent += len(text)
+                lines[n] = {"n": n, "path": str(path), "seconds": audio_seconds(path), "chars": len(text), "text": text, "voice_id": voice_id}
+            vo = {**vo, "done": i, "scenes": [lines[k] for k in sorted(lines)], "seconds": round(sum(x["seconds"] for x in lines.values()), 2),
+                  "chars": sum(x["chars"] for x in lines.values())}
+            store.set_extras(sid, {**store.get(sid).extras, "voiceover": vo})
+        sc = store.get(sid)
+        spoken = {int(x["n"]): x for x in vo["scenes"]}
+        warnings = list(vo["warnings"])
+        stretched = []
+        for s in sc.scenes:
+            n = int(s.get("n") or 0)
+            need = spoken.get(n, {}).get("seconds", 0)
+            if need and need > float(s.get("seconds") or 0) + 0.35:
+                warnings.append(f"scene {n}: the line takes {need:.1f}s but the scene is {float(s.get('seconds') or 0):.1f}s" + (" - stretched to fit" if fit_scenes else ""))
+                stretched.append(n)
+        scenes = [{**s, "seconds": max(float(s.get("seconds") or 0), spoken[int(s.get("n") or 0)]["seconds"] + 0.3)} if int(s.get("n") or 0) in stretched else s
+                  for s in sc.scenes] if (fit_scenes and stretched) else None
+        vo = {**vo, "status": "ready", "warnings": warnings, "full": None}
+        store.update(sid, scenes=scenes, extras={**sc.extras, "voiceover": vo}, edited_by="editor:voiceover")
+        state.store.audit("editor", "script.voiceover", "script", sid, {"scenes": len(vo["scenes"]), "chars": spent, "voice": voice_id, "provider": tts.name})
+        log.info("voiceover %s ready: %d lines, %d new characters, voice %s", sid, len(vo["scenes"]), spent, voice_id)
+    except Exception as exc:  # noqa: BLE001 - the failure belongs on the script, and the lines already spoken stay
+        log.exception("voiceover %s failed", sid)
+        cur = store.get(sid)
+        done = (cur.extras.get("voiceover") or {})
+        store.set_extras(sid, {**cur.extras, "voiceover": {**done, "status": "failed", "error": f"{type(exc).__name__}: {exc}"[:400]}})
+
+
+@router.post("/scripts/{sid}/voiceover", status_code=status.HTTP_202_ACCEPTED)
 def make_voiceover(request: Request, sid: str, body: VoiceoverBody) -> dict[str, Any]:
-    """Speak every scene with ElevenLabs. One file per scene, so the voice stays inside its own shot."""
+    """Speak the script with ElevenLabs - one file per scene, so the voice stays inside its own shot. Runs in the
+    background: the page polls the script and shows 'spoken 12 of 36'."""
     store = _scripts(request)
     tts = _tts(request)
     sc = store.get(sid)
@@ -294,44 +348,39 @@ def make_voiceover(request: Request, sid: str, body: VoiceoverBody) -> dict[str,
         raise HTTPException(404, "script not found")
     if sc.status == "generating":
         raise HTTPException(409, "the writer is still working on this script")
-    voice_id, voice_note = _resolve_voice(request, tts, body.voice_id)
-    out_dir = _voice_dir(request, sid)
-    wanted = set(body.scenes or [])
-    existing = {int(x["n"]): x for x in ((sc.extras.get("voiceover") or {}).get("scenes") or [])}
-    lines, spent = [], 0
-    for scene in sc.scenes:
-        n = int(scene.get("n") or 0)
-        text = (scene.get("voiceover") or "").strip()
-        if wanted and n not in wanted:
-            if n in existing:
-                lines.append(existing[n])
-            continue
-        if not text:
-            continue
-        path = out_dir / f"scene_{n:03d}.mp3"
-        try:
-            tts.speak(text, path, voice_id=voice_id or None)
-        except TTSError as exc:
-            raise HTTPException(502, f"scene {n}: {exc}") from exc
-        spent += len(text)
-        lines.append({"n": n, "path": str(path), "seconds": audio_seconds(path), "chars": len(text), "text": text})
-    if not lines:
+    if (sc.extras.get("voiceover") or {}).get("status") == "speaking":
+        raise HTTPException(409, "already speaking this script")
+    if not any((s.get("voiceover") or "").strip() for s in sc.scenes):
         raise HTTPException(400, "no voiceover lines to speak")
-    lines.sort(key=lambda x: x["n"])
-    by_scene = {int(x["n"]): x for x in lines}
-    warnings = [f"scene {x['n']}: the line takes {x['seconds']:.1f}s but the scene is {float(next((s.get('seconds') or 0) for s in sc.scenes if int(s.get('n') or 0) == x['n'])):.1f}s"
-                for x in lines if x["seconds"] > float(next((s.get("seconds") or 0) for s in sc.scenes if int(s.get("n") or 0) == x["n"])) + 0.35]
-    scenes = None
-    if body.fit_scenes and warnings:
-        scenes = [{**s, "seconds": max(float(s.get("seconds") or 0), by_scene[int(s.get("n") or 0)]["seconds"] + 0.3)} if int(s.get("n") or 0) in by_scene else s
-                  for s in sc.scenes]
-        warnings = [w + " - the scene was stretched to fit" for w in warnings]
-    vo = {"provider": tts.name, "voice_id": voice_id, "voice_name": voice_note.get("name"), "scenes": lines,
-          "seconds": round(sum(x["seconds"] for x in lines), 2), "chars": sum(x["chars"] for x in lines),
-          "warnings": ([voice_note["note"]] if voice_note.get("note") else []) + warnings, "made_at": _now_iso()}
-    out = store.update(sid, scenes=scenes, extras={**sc.extras, "voiceover": vo}, edited_by="editor:voiceover")
-    request.app.state.store.audit("editor", "script.voiceover", "script", sid, {"scenes": len(lines), "chars": spent, "voice": voice_id, "provider": tts.name})
-    return {**out.model_dump(mode="json"), "planned_seconds": out.planned_seconds, "words": out.words}
+    voice_id, voice_note = _resolve_voice(request, tts, body.voice_id)
+    state = request.app.state
+    # flag it here, not in the worker: whoever reads the script next must see 'speaking', not the previous run's result
+    store.set_extras(sid, {**sc.extras, "voiceover": {**(sc.extras.get("voiceover") or {}), "status": "speaking", "done": 0,
+                                                      "voice_id": voice_id, "voice_name": voice_note.get("name"), "error": None}})
+    state.runner.run_async(lambda: _speak_script(state, sid, voice_id=voice_id, voice_name=voice_note.get("name"), note=voice_note.get("note") or "",
+                                                 wanted=set(body.scenes or []), fit_scenes=body.fit_scenes, force=body.force))
+    return {"script_id": sid, "voice_id": voice_id, "voice_name": voice_note.get("name"), "status": "speaking"}
+
+
+@router.get("/scripts/{sid}/audio/full")
+def full_audio(request: Request, sid: str) -> FileResponse:
+    """The whole voiceover as one track, each line inside its own scene - the same audio the video gets."""
+    from services.video_composer.storyboard import Segment, voice_track
+
+    sc = _scripts(request).get(sid)
+    if sc is None:
+        raise HTTPException(404, "script not found")
+    lines = {int(x["n"]): x for x in ((sc.extras.get("voiceover") or {}).get("scenes") or [])}
+    if not lines:
+        raise HTTPException(404, "no voiceover yet")
+    out = request.app.state.settings.voiceovers_dir / sid / "full.m4a"
+    newest = max((Path(x["path"]).stat().st_mtime for x in lines.values() if Path(x["path"]).exists()), default=0)
+    if not out.exists() or out.stat().st_mtime < newest:
+        segs = [Segment(n=int(s.get("n") or 0), seconds=max(0.5, float(s.get("seconds") or 0)), kind="clip",
+                        voice_path=lines.get(int(s.get("n") or 0), {}).get("path")) for s in sc.scenes]
+        if voice_track(segs, out) is None:
+            raise HTTPException(404, "no voiceover yet")
+    return FileResponse(out, media_type="audio/mp4", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/scripts/{sid}/audio/{scene}")
