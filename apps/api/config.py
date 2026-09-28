@@ -11,6 +11,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+# A deployment that should work with no .env editing can carry its own voiceover credentials: paste the key into
+# BUILTIN_TTS_KEY below (it is one line, and it stays in whatever copy of the code you deploy). Leave it empty to require
+# ELEVENLABS_API_KEY in the environment. The environment always wins over what is written here.
+BUILTIN_TTS_KEY = ""
+BUILTIN_TTS_VOICE = "1qEiC6qsybMkmnNdVMbK"      # Monika Sogam - Hindi Modulated Voice (a public voice id, not a secret)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -68,10 +75,10 @@ class Settings(BaseSettings):
     stt_language: str = "hi-IN"       # dictation language the mic starts in
 
     # ---- voiceover (script -> spoken audio -> laid over the rendered video)
-    tts_provider: str = "none"        # none | elevenlabs | mock
-    elevenlabs_api_key: str = ""
-    elevenlabs_voice_id: str = ""     # default voice; the page can pick another from the account
-    elevenlabs_model: str = "eleven_multilingual_v2"   # Hindi, Hinglish and English on one model
+    tts_provider: str = "elevenlabs" if BUILTIN_TTS_KEY else "none"   # elevenlabs | none | mock
+    elevenlabs_api_key: str = BUILTIN_TTS_KEY
+    elevenlabs_voice_id: str = BUILTIN_TTS_VOICE   # the page can pick another from the account
+    elevenlabs_model: str = "eleven_turbo_v2_5"    # speaks Hindi, half the credits of multilingual_v2
     elevenlabs_speed: float = 1.0
 
     # upload proxies: raw camera files are shrunk (720p H.264) before they go to Gemini. Cost is per second of video,

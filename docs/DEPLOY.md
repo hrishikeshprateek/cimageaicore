@@ -139,6 +139,30 @@ docker compose logs -f api                                # wait for "Applicatio
 Open **http://\<server-ip\>:8000/admin**. `restart: unless-stopped` on every service means a reboot or power cut
 brings the stack back on its own; only `docker compose stop` keeps it down.
 
+## 2c. Voiceovers on a new machine
+
+The Script writer speaks a script with ElevenLabs. A fresh deployment has no `.env`, so pick one of:
+
+* **Carry it with the code** — paste the key once into `BUILTIN_TTS_KEY` in [`apps/api/config.py`](../apps/api/config.py).
+  Every machine that runs that copy speaks with no configuration at all. Only do this if the repository is private:
+  a key committed to a public repo is scraped within minutes. `git rev-parse --abbrev-ref --symbolic-full-name @{u}` shows
+  where the code is pushed.
+* **Per machine** — add the lines to that machine's `.env` (Docker: `/opt/cimage-ai/.env`, then `docker compose up -d`,
+  which recreates the container; a plain `restart` keeps the old environment):
+
+```bash
+cat >> /opt/cimage-ai/.env <<'ENV'
+TTS_PROVIDER=elevenlabs
+ELEVENLABS_API_KEY=sk_...
+ELEVENLABS_VOICE_ID=1qEiC6qsybMkmnNdVMbK
+ELEVENLABS_MODEL=eleven_turbo_v2_5
+ENV
+docker compose -f /opt/cimage-ai/docker-compose.yml up -d
+```
+
+Either way `curl -s localhost:8000/api/v1/script-options` shows `"voiceover": {"provider": "elevenlabs"}` when it arrived,
+and the Script writer page shows the provider as a badge next to the voice.
+
 ## 3. Day-to-day
 
 | Task | How |
