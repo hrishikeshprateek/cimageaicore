@@ -291,8 +291,13 @@ is ordinary editing.
   and fold away behind their toolbar buttons below 1180 px, a timeline whose height follows the viewport
   (`clamp(168px,23vh,258px)`), and `min-width:0` down the whole chain so the toolbar's content can never stretch the
   page. Measured at 1680/1440/1280/1100/960: no page scroll and nothing overflowing at any of them.
-* While the studio is open the app frame goes dark with it, so there is no light rail around a dark editor - and the
-  **Quick single cut** trimmer wears the same surface, so switching tabs does not switch products.
+* **Quick single cut** is the same application in a simpler mode: the same bar (mode switch, source, output chips, frame,
+  Render), the video list on the left, the viewer with its transport and the scrubber + speech lane in the middle, and a
+  right inspector whose sections (Cut · Proposed cuts · Framing · Captions · Lower third · Brand frame) collapse instead
+  of stacking into a wall of controls, with the renders as a strip along the bottom.
+* **Every panel is resizable**: drag the seams between sources / monitor / inspector and above the timeline, double-click
+  one to reset it. The sizes are remembered per mode (`cimage.panes.editor`, `cimage.panes.cut`).
+* While the studio is open the app frame goes dark with it, so there is no light rail around a dark editor.
 * The timeline has a **track gutter** (V1 · video, TXT · on screen) like an NLE, each clip is underlined in the colour of
   the video it came from with a legend naming them, and dragging is a real lift: the clip rises, a ghost follows the
   pointer, a caret shows exactly where it will land, and the drop commits. Items in **Sources can be dragged straight

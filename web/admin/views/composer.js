@@ -1,13 +1,14 @@
 // Reels studio: pick an analysed local video, choose a cut, frame it, caption it, render branded shorts.
 import { api, post, del, esc, attr, icon, ts, r1, toast, confirmDialog, emptyState } from '../core.js';
 import * as editor from './editor.js';
+import { installSplitters } from '../panes.js';
 
 export const title = 'Reels studio';
 export const subtitle = 'analysed video → proposed cut → branded short';
 let root, ctx, SYSTEM = null, JOBS = [], JOBSIG = '', SEL = null, JOB = null, CUTS = null, CUT = null, DUR = 0, TPL = 'placeholder', RENDERS = [];
 const ED_FRAMING = () => ({ fit: 'auto', focus_x: 0.5, focus_y: 0.5 });
 let ED = blankEd(), FR = null, FOCUS_MANUAL = false, FR_REQ = 0, FR_TIMER = null, FR_IMG_KEY = '', LOOP = false, keyHandler = null;
-let TR = null, SNAP = true, TRACK = false, SNAP_TIMER = null, WANT = null;   // the measured transcript, and whether edges snap to its sentences
+let TR = null, SNAP = true, TRACK = false, SNAP_TIMER = null, WANT = null, UNSPLIT = null;   // the measured transcript, and whether edges snap to its sentences
 function blankEd() { return { cut_in: 0, cut_out: 0, captions: [], captions_enabled: true, lower_third: { name: '', role: '' }, title: '', cut_id: null, ...ED_FRAMING() }; }
 const $ = (s) => root && root.querySelector(s);
 const $$ = (s) => root ? [...root.querySelectorAll(s)] : [];
@@ -26,23 +27,82 @@ export async function tick() { if (!root || !SYSTEM || !SYSTEM.enabled || MODE =
 export function destroy() { if (keyHandler) document.removeEventListener('keydown', keyHandler); keyHandler = null; clearTimeout(FR_TIMER); editor.unmount(); const v = document.getElementById('view'); if (v) v.classList.remove('cut-page'); root = null; SEL = null; MODE = 'edit'; }
 
 let MODE = 'edit';   // the studio opens as an editor; the single-cut trimmer is the other tab
-const cutMarkup = () => `<div class="studio">
-    <div class="stack"><div class="card"><div class="hd"><h3>Analysed videos</h3><span class="sp"></span><span class="tag" id="jobcount"></span></div><div class="bd flush list" id="jobs"><div class="loading"><span class="spin"></span></div></div></div>
-      <div class="card"><div class="hd"><h3>Template &amp; output</h3></div><div class="bd"><select id="tpl"></select>
-        <div class="chips" style="margin-top:12px" id="presets"><label class="chip on"><input type="checkbox" value="reels" checked hidden> Reels 9:16</label><label class="chip"><input type="checkbox" value="square" hidden> Feed 1:1</label><label class="chip"><input type="checkbox" value="landscape" hidden> YouTube 16:9</label></div>
-        <img id="tplprev" class="tplprev" alt="template preview" hidden>
-        <details style="margin-top:12px"><summary>Upload a real layer (PNG with alpha / .mov 4444 / .webm)</summary>
-          <div class="stack" style="gap:8px;margin-top:8px"><div class="field"><label>Template name</label><input type="text" id="upname" placeholder="cimage"></div>
-          <div class="row gap16"><div class="field grow"><label>Preset</label><select id="uppreset"><option value="reels">reels</option><option value="square">square</option><option value="landscape">landscape</option></select></div><div class="field grow"><label>Layer name</label><input type="text" id="uplayer" value="frame"></div></div>
-          <div class="row gap16"><div class="field grow"><label>x</label><input type="number" id="upx" value="0"></div><div class="field grow"><label>y</label><input type="number" id="upy" value="0"></div><div class="field grow"><label>z</label><input type="number" id="upz" value="0"></div></div>
-          <label class="check"><input type="checkbox" id="upreplace" checked> replace all existing layers of this preset</label>
-          <input type="file" id="upfile" accept=".png,.mov,.webm"><button class="btn tonal sm" id="upgo">${icon('upload', 's')}Upload</button><div class="msg" id="upmsg"></div></div></details>
-      </div></div></div>
-    <div class="stack" style="min-width:0">
-      <div class="card" id="editor"><div class="bd">${emptyState('layers', 'Pick an analysed video on the left', 'its proposed cuts land on the timeline, and you take it from there')}</div></div>
-    </div>
-    <div class="card rcol"><div class="hd"><h3>Renders</h3><span class="sp"></span><span class="tag" id="rcount"></span></div><div class="bd" id="renders"><div class="empty">No renders yet.</div></div></div>
-  </div>`;
+const cutMarkup = () => `<div class="nle cutnle">
+  <header class="sbar">
+    <div class="segmode"><button data-mode="edit">${icon('layers', 's')}Editor</button><button class="on" data-mode="cut">${icon('cut', 's')}Quick cut</button></div>
+    <span class="srcname ellipsis" id="cutname">pick a video</span>
+    <span class="state" id="cutdur"></span>
+    <span class="sp"></span>
+    <span class="outsel"><label>output</label><span class="chips" id="presets"><label class="chip on"><input type="checkbox" value="reels" checked hidden>9:16</label><label class="chip"><input type="checkbox" value="square" hidden>1:1</label><label class="chip"><input type="checkbox" value="landscape" hidden>16:9</label></span></span>
+    <span class="outsel"><label>frame</label><select id="tpl"></select></span>
+    <button class="btn sm filled" id="render">${icon('movie', 's')}Render</button>
+  </header>
+  <div class="nle-top">
+    <aside class="pane src"><div class="ph"><b>Videos</b><span class="sp"></span><span class="muted body-s" id="jobcount"></span></div>
+      <div class="pb flush list" id="jobs"><div class="loading"><span class="spin"></span></div></div></aside>
+
+    <div class="split v" data-split="src" title="drag to resize · double-click to reset"></div>
+    <section class="pane mon">
+      <div class="stage cutstage"><div class="frame" id="frame"><video id="src" preload="metadata" playsinline></video></div></div>
+      <div class="transport">
+        <button class="btn sm" id="setin" title="set IN at the playhead (I)">IN</button>
+        <button class="btn sm filled" id="loop" title="loop the cut (L)">${icon('play', 's')}</button>
+        <button class="btn sm" id="setout" title="set OUT at the playhead (O)">OUT</button>
+        <span class="tcbox"><b id="tin">0:00.0</b> <span>→</span> <b id="tout">0:00.0</b> <span>= <b id="tlen">0.0</b>s</span></span>
+        <span class="sp"></span><span class="muted body-s">playhead <b class="mono" id="phv">0.0</b>s</span>
+        <label class="check" title="every edge lands on a sentence boundary"><input type="checkbox" id="snap" checked> snap</label>
+      </div>
+      <div class="cutbar">
+        <div class="trim" id="trim"><div class="win" id="win"></div><div class="h" id="hin" title="drag: IN"></div><div class="h" id="hout" title="drag: OUT"></div><div class="ph" id="ph"></div><span class="tick" style="left:0">0:00</span><span class="tick" id="tickend" style="left:100%"></span></div>
+        <div class="speech" id="speech"></div>
+        <div id="cutwarn"></div>
+      </div>
+    </section>
+
+    <div class="split v" data-split="insp" title="drag to resize · double-click to reset"></div>
+    <aside class="pane insp">
+      <div class="ph"><b>Inspector</b><span class="sp"></span><span class="muted body-s" id="cuecount"></span></div>
+      <div class="pb">
+        <details class="sec" open><summary>Cut</summary>
+          <div class="row" style="flex-wrap:nowrap;gap:6px"><input type="number" id="cin" step="0.1" min="0" style="flex:1;width:auto;min-width:0"><span class="muted">→</span><input type="number" id="cout" step="0.1" min="0" style="flex:1;width:auto;min-width:0"></div>
+          <div class="nudge"><span>IN</span><button class="btn xs tonal" data-n="in" data-d="-1">−1</button><button class="btn xs tonal" data-n="in" data-d="-0.2">−.2</button><button class="btn xs tonal" data-n="in" data-d="0.2">+.2</button><button class="btn xs tonal" data-n="in" data-d="1">+1</button>
+            <span>OUT</span><button class="btn xs tonal" data-n="out" data-d="-1">−1</button><button class="btn xs tonal" data-n="out" data-d="-0.2">−.2</button><button class="btn xs tonal" data-n="out" data-d="0.2">+.2</button><button class="btn xs tonal" data-n="out" data-d="1">+1</button></div>
+          <div class="field" style="margin-top:10px"><label>Title for the render</label><input type="text" id="title"></div>
+          <div id="says" hidden></div>
+        </details>
+        <details class="sec" open><summary>Proposed cuts <span id="refinebox"></span></summary><div id="cuts"><div class="loading"><span class="spin"></span></div></div></details>
+        <details class="sec"><summary>Framing <span class="tag" id="frfit"></span></summary>
+          <div class="frprev" id="frprev"><img id="frimg" alt="frame at IN"><div class="crop" id="frcrop" hidden></div></div>
+          <div class="seg" id="fitseg" style="margin-top:8px"><label><input type="radio" name="fit" value="auto" checked>Auto</label><label><input type="radio" name="fit" value="cover">Fill</label><label><input type="radio" name="fit" value="contain">Fit</label></div>
+          <div class="row" style="margin-top:8px"><span class="muted body-s" id="frax">focus</span><input type="range" id="focus" min="0" max="100" value="50" style="flex:1"><button class="btn xs tonal" id="refocus" title="re-run face detection">${icon('people', 's')}</button></div>
+          <label class="check" style="margin-top:8px"><input type="checkbox" id="track"> follow the speaker</label>
+          <div class="muted body-s" id="frnote" style="margin-top:8px"></div><div class="muted body-s" id="frinfo" style="margin-top:4px"></div>
+        </details>
+        <details class="sec"><summary>Captions</summary>
+          <div class="row between"><label class="check"><input type="checkbox" id="capon" checked> burn them in</label>
+            <div class="row gap4"><button class="btn xs tonal" id="regen" title="rebuild from the transcript">${icon('refresh', 's')}</button><button class="btn xs" id="addcue">${icon('add', 's')}</button></div></div>
+          <div id="cues" style="margin-top:8px"></div>
+        </details>
+        <details class="sec"><summary>Lower third</summary>
+          <div class="field"><label>Name</label><input type="text" id="ltname" placeholder="Name"></div>
+          <div class="field" style="margin-top:8px"><label>Role</label><input type="text" id="ltrole" placeholder="Role / batch / company"></div>
+        </details>
+        <details class="sec"><summary>Brand frame</summary>
+          <img id="tplprev" class="tplprev" alt="template preview" hidden>
+          <div class="field" style="margin-top:8px"><label>Template name</label><input type="text" id="upname" placeholder="cimage"></div>
+          <div class="row gap4" style="margin-top:6px"><select id="uppreset"><option value="reels">reels</option><option value="square">square</option><option value="landscape">landscape</option></select><input type="text" id="uplayer" value="frame" style="width:90px"></div>
+          <div class="row gap4" style="margin-top:6px"><input type="number" id="upx" value="0" placeholder="x"><input type="number" id="upy" value="0" placeholder="y"><input type="number" id="upz" value="0" placeholder="z"></div>
+          <label class="check" style="margin-top:6px"><input type="checkbox" id="upreplace" checked> replace this preset's layers</label>
+          <input type="file" id="upfile" accept=".png,.mov,.webm" style="margin-top:6px"><button class="btn xs tonal" id="upgo" style="margin-top:6px">${icon('upload', 's')}Upload</button><div class="msg" id="upmsg"></div>
+        </details>
+        <div class="msg" id="rmsg"></div>
+      </div>
+    </aside>
+  </div>
+  <div class="split h" data-split="tl" title="drag to resize · double-click to reset"></div>
+  <div class="nle-tl cutstrip"><div class="tlbar"><b class="lbl">Renders</b><span class="tag" id="rcount"></span><span class="sp"></span></div>
+    <div class="strip" id="renders"><div class="empty">No renders yet.</div></div></div>
+</div>`;
 function setMode(m) {
   if (MODE === m) return;
   MODE = m;
@@ -55,7 +115,7 @@ async function mountMode() {
   const hint = $('#modehint'); if (hint) hint.textContent = MODE === 'edit' ? 'the AI fills the timeline in — drag the clips to rearrange it' : 'one window of one video, trimmed by hand';
   editor.unmount();
   if (keyHandler) { document.removeEventListener('keydown', keyHandler); keyHandler = null; }
-  const modes = $('#modes'); if (modes) modes.hidden = (MODE === 'edit');   // the editor carries its own switch
+  const modes = $('#modes'); if (modes) modes.hidden = true;   // both modes carry their own switch in the studio bar
   const v = document.getElementById('view'); if (v) v.classList.remove('cut-page');
   if (MODE === 'edit') {
     body.innerHTML = '';
@@ -68,6 +128,9 @@ async function mountMode() {
   }
   const view = document.getElementById('view'); if (view) view.classList.add('cut-page');   // same surface as the editor
   body.innerHTML = cutMarkup();
+  $$('.cutnle .segmode button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+  if (UNSPLIT) UNSPLIT();
+  UNSPLIT = installSplitters($('.cutnle'), { key: 'cut', onResize: () => { if (SEL) scheduleFraming(false, 400); } });
   JOBSIG = '';
   renderTemplates(); await refreshJobs();
   $$('#presets .chip').forEach((l) => l.onclick = (e) => { e.preventDefault(); const cb = l.querySelector('input'); cb.checked = !cb.checked; l.classList.toggle('on', cb.checked); previewTemplate(); syncRenderButton(); if (SEL) scheduleFraming(false, 0); });
@@ -105,36 +168,10 @@ function loadCut(c) { CUT = c.id; ED = { cut_in: c.in_seconds, cut_out: c.out_se
 // ---------------------------------------------------------------- editor
 function mountEditor() {
   const j = JOB;
-  $('#editor').innerHTML = `<div class="bd" style="padding:20px">
-  <div class="row between"><h3 class="title-m ellipsis" style="max-width:70%" title="${attr(j.source.name)}">${esc(j.source.name)}</h3><span class="tag mono">${ts(j.source.duration_seconds || 0)}</span></div>
-  <div class="player" style="margin-top:12px"><video id="src" src="/api/v1/jobs/${esc(j.id)}/media" controls preload="metadata" playsinline></video></div>
-  <div class="trim" id="trim"><div class="win" id="win"></div><div class="h" id="hin" title="drag: IN"></div><div class="h" id="hout" title="drag: OUT"></div><div class="ph" id="ph"></div><span class="tick" style="left:0">0:00</span><span class="tick" id="tickend" style="left:100%"></span></div>
-  <div class="speech" id="speech"></div>
-  <div class="saysbox" id="says" hidden></div>
-  <div class="row" style="margin-top:22px"><span class="tc">IN <b id="tin">0:00.0</b> &nbsp;→&nbsp; OUT <b id="tout">0:00.0</b> &nbsp;=&nbsp; <b id="tlen">0.0</b>s</span><span class="muted body-s">playhead <b class="mono" id="phv">0.0</b>s</span><span class="sp"></span>
-    <button class="btn sm tonal" id="setin" title="key: I">⟵ IN here</button><button class="btn sm tonal" id="setout" title="key: O">OUT here ⟶</button><button class="btn sm outlined" id="loop" title="key: L">${icon('play', 's')}loop the cut</button>
-    <label class="check" id="snapbox" title="move every edge onto a sentence boundary, inside the silence"><input type="checkbox" id="snap" checked> snap to speech</label></div>
-  <div class="muted body-s" style="margin-top:6px">Drag the handles or press <kbd>I</kbd> / <kbd>O</kbd> at the playhead · <kbd>space</kbd> play/pause · <kbd>L</kbd> loop · <kbd>←</kbd>/<kbd>→</kbd> step 0.2 s</div>
-  <div id="cutwarn"></div>
-  <div class="g2 even" style="margin-top:14px">
-    <div><div class="row between"><span class="overline">Proposed cuts</span><span id="refinebox"></span></div><div id="cuts" style="margin-top:8px"><div class="loading"><span class="spin"></span></div></div></div>
-    <div><span class="overline">Fine trim (seconds)</span>
-      <div class="row" style="margin-top:8px;flex-wrap:nowrap"><input type="number" id="cin" step="0.1" min="0" style="flex:1;width:auto;min-width:0"><span>→</span><input type="number" id="cout" step="0.1" min="0" style="flex:1;width:auto;min-width:0"></div>
-      <div class="nudge"><span>IN</span><button class="btn xs tonal" data-n="in" data-d="-1">−1s</button><button class="btn xs tonal" data-n="in" data-d="-0.2">−0.2</button><button class="btn xs tonal" data-n="in" data-d="0.2">+0.2</button><button class="btn xs tonal" data-n="in" data-d="1">+1s</button>
-        <span>OUT</span><button class="btn xs tonal" data-n="out" data-d="-1">−1s</button><button class="btn xs tonal" data-n="out" data-d="-0.2">−0.2</button><button class="btn xs tonal" data-n="out" data-d="0.2">+0.2</button><button class="btn xs tonal" data-n="out" data-d="1">+1s</button></div>
-      <div class="field" style="margin-top:14px"><label>Lower third (name · role)</label><div class="row" style="flex-wrap:nowrap"><input type="text" id="ltname" placeholder="Name" style="flex:1;width:auto;min-width:0"><input type="text" id="ltrole" placeholder="Role / batch / company" style="flex:1;width:auto;min-width:0"></div></div>
-      <div class="field" style="margin-top:10px"><label>Title (label for the render)</label><input type="text" id="title"></div></div>
-  </div>
-  <div class="row between" style="margin-top:20px"><span class="overline">Framing <span class="tag" id="frfit"></span></span><span class="muted body-s" id="frinfo"></span></div>
-  <div class="framing" style="margin-top:8px"><div class="frprev" id="frprev"><img id="frimg" alt="frame at IN"><div class="crop" id="frcrop" hidden></div></div>
-    <div><div class="seg" id="fitseg"><label title="fill the clip window for wide sources; letterbox only when cropping would lose too much"><input type="radio" name="fit" value="auto" checked>Auto</label><label title="scale to fill the window and crop the overflow"><input type="radio" name="fit" value="cover">Fill</label><label title="show the whole frame, brand colour around it"><input type="radio" name="fit" value="contain">Fit</label></div>
-      <div class="row" style="margin-top:12px"><span class="muted body-s" id="frax">focus</span><input type="range" id="focus" min="0" max="100" value="50" style="flex:1"><button class="btn xs tonal" id="refocus" title="re-run face detection on this cut">${icon('people', 's')}faces</button></div>
-      <label class="check" id="trackbox" style="margin-top:10px" title="the crop follows the speaker across the cut instead of sitting on one point"><input type="checkbox" id="track"> follow the speaker <span class="muted body-s">(tracked pan, slower render)</span></label>
-      <div class="muted body-s" id="frnote" style="margin-top:8px"></div></div></div>
-  <div class="row between" style="margin-top:20px"><label class="check"><input type="checkbox" id="capon" checked> Burn captions <span class="tag" id="cuecount"></span></label><div class="row"><button class="btn xs tonal" id="regen" title="regenerate the cues for the current IN/OUT from the transcript">${icon('refresh', 's')}from transcript</button><button class="btn xs" id="addcue">${icon('add', 's')}cue</button></div></div>
-  <div class="muted body-s" style="margin:6px 0 8px">Times are seconds from the cut's IN point. Hindi/English both fine; cues outside the cut are greyed.</div>
-  <div id="cues"></div>
-  <div class="sticky-bottom"><button class="btn filled" id="render" style="width:100%;height:48px;font-size:15px">Render</button><div class="msg" id="rmsg" style="margin-top:8px"></div></div></div>`;
+  const n = $('#cutname'); if (n) { n.textContent = j.source.name; n.title = j.source.path || ''; }
+  const d = $('#cutdur'); if (d) d.textContent = ts(j.source.duration_seconds || 0);
+  const v = $('#src'); if (v && !v.src.includes(j.id)) v.src = `/api/v1/jobs/${j.id}/media`;
+
   bindEditor();
 }
 function bindEditor() {
@@ -172,7 +209,13 @@ function syncTrim() {
   $$('#lane .sent').forEach((n) => { const x = TR && TR.sentences && TR.sentences.find((y) => y.i === +n.dataset.i); if (x) n.classList.toggle('on', x.start >= ED.cut_in - 0.05 && x.end <= ED.cut_out + 0.05); });
 }
 function syncFields() { $('#cin').value = ED.cut_in; $('#cout').value = ED.cut_out; $('#ltname').value = ED.lower_third.name || ''; $('#ltrole').value = ED.lower_third.role || ''; $('#title').value = ED.title || ''; $('#capon').checked = ED.captions_enabled; }
-function syncRenderButton() { const b = $('#render'); if (!b) return; const n = selectedPresets().length; b.textContent = `Render ${n} preset${n === 1 ? '' : 's'} · ${(ED.cut_out - ED.cut_in).toFixed(1)}s · template “${TPL}”${ED.captions_enabled ? '' : ' · no captions'}${TRACK ? ' · tracked' : ''}`; b.disabled = !n; }
+function syncRenderButton() {
+  const b = $('#render'); if (!b) return;
+  const n = selectedPresets().length;
+  b.innerHTML = `${icon('movie', 's')}Render <b>${(ED.cut_out - ED.cut_in).toFixed(1)}s</b>`;
+  b.title = `${n} preset${n === 1 ? '' : 's'} · template “${TPL}”${ED.captions_enabled ? '' : ' · no captions'}${TRACK ? ' · tracked' : ''}`;
+  b.disabled = !n;
+}
 
 // ---------------------------------------------------------------- the speech lane: cut by sentence, not by guesswork
 async function loadTranscript() {

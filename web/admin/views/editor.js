@@ -1,9 +1,10 @@
 // The edit studio: sources on the left, the program monitor in the middle, the clip inspector on the right, and a real
 // timeline along the bottom. The AI fills the timeline in; everything after that is ordinary editing.
 import { api, post, put, del, esc, attr, icon, ts, toast, confirmDialog, emptyState } from '../core.js';
+import { installSplitters } from '../panes.js';
 
 let host = null, TL = null, JOBS = [], JOB = null, SEL = null, SRC = null, SWITCH = null, DRAG_SRC = null;       // SRC: the video open in the sources panel
-let PX = 24, HEAD = 0, PLAYING = false, TIMER = null, SAVE_T = null, POLL = null, dirty = false, SNAP = true, keys = null, RESIZE = null, RESIZE_T = null, RO = null;
+let PX = 24, HEAD = 0, PLAYING = false, TIMER = null, SAVE_T = null, POLL = null, dirty = false, SNAP = true, keys = null, RESIZE = null, RESIZE_T = null, RO = null, UNSPLIT = null;
 const $ = (s) => host && host.querySelector(s);
 const $$ = (s) => host ? [...host.querySelectorAll(s)] : [];
 const clip = (id) => (TL ? TL.clips.find((c) => c.id === id) : null);
@@ -38,6 +39,7 @@ export async function mount(el, { job, jobs, onMode }) {
   // the stage is the authority on how big the monitor may be, and it changes when a panel folds or the window moves
   const stage = host.querySelector('.stage');
   if (stage && window.ResizeObserver) { RO = new ResizeObserver(() => fitFrame()); RO.observe(stage); }
+  UNSPLIT = installSplitters(host.querySelector('.nle'), { key: 'editor', onResize: () => { fitFrame(); drawTimeline(); } });
   RESIZE = () => { clearTimeout(RESIZE_T); RESIZE_T = setTimeout(() => { fitFrame(); fitZoom(); }, 120); };
   window.addEventListener('resize', RESIZE);
 }
@@ -46,6 +48,7 @@ export function unmount() {
   if (page()) page().classList.remove('studio-page');
   if (RESIZE) window.removeEventListener('resize', RESIZE);
   if (RO) { RO.disconnect(); RO = null; }
+  if (UNSPLIT) { UNSPLIT(); UNSPLIT = null; }
   RESIZE = null; clearTimeout(RESIZE_T);
   stop(); clearTimeout(SAVE_T); clearTimeout(POLL);
   if (keys) document.removeEventListener('keydown', keys);
@@ -72,6 +75,7 @@ function draw() {
     </header>
     <div class="nle-top">
       <aside class="pane src"><div class="ph"><b>Sources</b><span class="sp"></span><span class="muted body-s">${JOBS.length}</span></div><div class="pb" id="srcbody"></div></aside>
+      <div class="split v" data-split="src" title="drag to resize · double-click to reset"></div>
       <section class="pane mon">
         <div class="stage"><div class="frame ${TL.preset}" id="frame"><video id="pv" preload="metadata" playsinline></video><div class="burn" id="burn" hidden></div></div></div>
         <div class="transport">
@@ -82,10 +86,12 @@ function draw() {
           <span class="tcbox"><b id="tcnow">0:00.0</b> <span>/ <span id="tctot">0:00.0</span></span></span>
           <span class="sp"></span><span class="muted body-s" id="tclip"></span></div>
       </section>
+      <div class="split v" data-split="insp" title="drag to resize · double-click to reset"></div>
       <aside class="pane insp"><div class="ph"><b>Clip</b><span class="sp"></span><span class="muted body-s" id="inspid"></span></div>
         <div class="pb" id="inspbody"></div>
         <div class="renders" id="renders"></div></aside>
     </div>
+    <div class="split h" data-split="tl" title="drag to resize the timeline · double-click to reset"></div>
     <div class="nle-tl">
       <div class="tlbar">
         <button class="btn xs" id="bsplit" title="split at the playhead (S)">${icon('cut', 's')}Split</button>
