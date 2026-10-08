@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     stt_provider: str = "browser"     # how the mic turns speech into text: browser (Chrome speech API) | whisper (local, later)
     stt_language: str = "hi-IN"       # dictation language the mic starts in
 
+    # ---- word-level transcripts (precise reel cuts: sentence boundaries and the silences between them)
+    transcribe_provider: str = "whisper"   # whisper | none | mock
+    whisper_model: str = "large-v3-turbo"  # best Hindi/Hinglish of the fast models; 'medium' is lighter, 'tiny' for smoke tests
+    whisper_device: str = "auto"
+    whisper_compute_type: str = "int8"     # int8 on CPU; float16 on a GPU box
+    whisper_language: str = ""             # blank = detect (needed for Hindi/English mixes)
+    whisper_threads: int = 0               # 0 = let CTranslate2 decide
+    transcribe_on_analysis: bool = True    # every analysed video gets its word timings right away
+
     # ---- voiceover (script -> spoken audio -> laid over the rendered video)
     tts_provider: str = "elevenlabs" if BUILTIN_TTS_KEY else "none"   # elevenlabs | none | mock
     elevenlabs_api_key: str = BUILTIN_TTS_KEY
@@ -127,6 +136,15 @@ class Settings(BaseSettings):
         return self.data_dir / "analyses"
 
     @property
+    def models_dir(self) -> Path:
+        """Where local models are cached (whisper); on the data volume so a container update keeps them."""
+        return self.data_dir / "models"
+
+    @property
+    def transcripts_dir(self) -> Path:
+        return self.data_dir / "transcripts"
+
+    @property
     def voiceovers_dir(self) -> Path:
         return self.data_dir / "voiceovers"
 
@@ -169,7 +187,7 @@ class Settings(BaseSettings):
         return self.ai_provider
 
     def ensure_dirs(self) -> None:
-        for d in (self.uploads_dir, self.jobs_dir, self.analyses_dir, self.proxies_dir, self.voiceovers_dir):
+        for d in (self.uploads_dir, self.jobs_dir, self.analyses_dir, self.proxies_dir, self.voiceovers_dir, self.transcripts_dir, self.models_dir):
             d.mkdir(parents=True, exist_ok=True)
         for d in self.allowed_roots:   # NAS mounts may be read-only or not connected yet: never fatal, the watcher skips missing roots
             try:

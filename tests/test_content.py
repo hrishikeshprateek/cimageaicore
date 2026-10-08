@@ -117,6 +117,7 @@ def pg_app(test_db_url, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setenv("WATCHER_ENABLED", "false")
     monkeypatch.setenv("AUTO_DRAFT", "false")
     monkeypatch.setenv("TTS_PROVIDER", "mock")
+    monkeypatch.setenv("TRANSCRIBE_PROVIDER", "mock")
     config.get_settings.cache_clear()
     from fastapi.testclient import TestClient
     from apps.api.main import create_app

@@ -28,10 +28,13 @@ from services import prompts as prompt_registry
 from services.prompts.registry import PromptRegistry
 from apps.api.prompt_routes import router as prompt_router
 from apps.api.script_routes import router as script_router
+from apps.api.transcribe_routes import router as transcribe_router, transcribe_job
 from services.retrieval.retriever import Retriever
 from agents.blog_agent.agent import BlogAgent
 from agents.script_agent.agent import ScriptAgent
 from services.tts import build_tts
+from services.transcribe import build_transcriber
+from apps.api.transcript_store import build_transcript_store
 
 WEB_DIR = REPO_ROOT / "web"
 
@@ -69,7 +72,10 @@ async def lifespan(app: FastAPI):
         images = ImageStore(store.pool, settings.data_dir / "images")
         scripts = ScriptStore(store.pool)
     runner = JobRunner(store, settings.worker_threads, embedder=embedder, content_store=content,
-                       on_content_candidate=lambda job_id, n: auto_draft_job(app.state, job_id))
+                       on_content_candidate=lambda job_id, n: auto_draft_job(app.state, job_id),
+                       # queued, not inline: measuring a long video must never hold up embeddings or the draft
+                       on_analysed=(lambda job_id: app.state.runner.run_async(lambda: transcribe_job(app.state, job_id)))
+                       if settings.transcribe_on_analysis else None)
     retriever = Retriever(store, embedder)
     blog_agent = BlogAgent(
         provider, retriever, prompt_version=registry.active("blog"), institution_context=registry.institution_context,
@@ -97,10 +103,13 @@ async def lifespan(app: FastAPI):
     app.state.scripts = scripts
     app.state.script_agent = script_agent
     app.state.tts = build_tts(settings)
+    app.state.transcriber = build_transcriber(settings)
+    app.state.transcripts = build_transcript_store(store, settings.transcripts_dir)
     app.state.watcher = _build_watcher(app, settings)
     app.state.watcher.start()
-    log.info("provider=%s model=%s embedder=%s/%s store=%s jobs_loaded=%d data_dir=%s watcher=%s auto_draft=%s", provider.name, provider.model,
-             embedder.name, embedder.model, store.kind, loaded, settings.data_dir, "on" if settings.watcher_enabled else "off", settings.auto_draft)
+    log.info("provider=%s model=%s embedder=%s/%s store=%s jobs_loaded=%d data_dir=%s watcher=%s auto_draft=%s asr=%s", provider.name, provider.model,
+             embedder.name, embedder.model, store.kind, loaded, settings.data_dir, "on" if settings.watcher_enabled else "off", settings.auto_draft,
+             getattr(app.state.transcriber, "name", "off"))
     try:
         yield
     finally:
@@ -160,6 +169,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     app.include_router(prompt_router)
     app.include_router(script_router)
+    app.include_router(transcribe_router)
 
     @app.get("/health", include_in_schema=False)
     def health() -> dict:

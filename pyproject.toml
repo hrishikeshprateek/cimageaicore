@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-settings>=2.3",
     "google-genai>=2.3.0",
     "httpx>=0.27",
+    "faster-whisper>=1.2",          # local word-level transcripts (precise reel cuts, dictation)
     "psycopg[binary]>=3.2",
     "psycopg_pool>=3.2",
     "pillow>=10.4",

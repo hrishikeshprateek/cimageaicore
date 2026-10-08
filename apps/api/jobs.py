@@ -215,10 +215,12 @@ def embed_job_blocks(store, embedder, job_id: str | None) -> int:
 class JobRunner:
     """Tiny in-process queue (thread pool). Stands in for Redis + workers until Phase 2."""
 
-    def __init__(self, store, worker_threads: int = 2, embedder=None, content_store=None, on_content_candidate: Callable[[str, int], None] | None = None):
+    def __init__(self, store, worker_threads: int = 2, embedder=None, content_store=None, on_content_candidate: Callable[[str, int], None] | None = None,
+                 on_analysed: Callable[[str], None] | None = None):
         self.store = store
         self.embedder = embedder
         self.content_store = content_store
+        self.on_analysed = on_analysed   # e.g. measure the word timings the reel cutter needs
         self.on_content_candidate = on_content_candidate   # e.g. auto-draft; called with (job_id, opportunities created)
         self.pool = ThreadPoolExecutor(max_workers=worker_threads, thread_name_prefix="video-worker")
 
@@ -238,6 +240,11 @@ class JobRunner:
                 self.store.complete(job_id, result)
                 self.store.transition(job_id, JobState.BLOCKS_COMPLETE, {"repaired": result.repaired, "counts": result.block_counts})
                 log.info("job %s complete: %s", job_id, result.block_counts)
+                if self.on_analysed is not None:
+                    try:
+                        self.on_analysed(job_id)      # word-level timings run alongside embeddings; failure is never fatal
+                    except Exception:  # noqa: BLE001
+                        log.exception("job %s post-analysis hook failed", job_id)
             except Exception as exc:  # noqa: BLE001 - any failure must land in the job record
                 log.exception("job %s failed", job_id)
                 self.store.fail(job_id, f"{type(exc).__name__}: {exc}")
