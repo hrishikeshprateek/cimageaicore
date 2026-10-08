@@ -268,20 +268,26 @@ Measurement is queued, never inline, so a long video never holds up embeddings o
 
 ## The edit studio (V1.4)
 
-Reels studio has two modes. **Cut one clip** is the single-window trimmer (now with the speech lane). **Edit a timeline**
-is the editor: the AI's proposals from a video land on a track as separate clips, and from there it is ordinary editing.
+Reels studio opens as an editor, laid out the way an editor is: **Sources** on the left, the **program monitor** in the
+middle, the **clip inspector** on the right, and a **timeline** across the bottom. The AI fills the timeline in; the rest
+is ordinary editing.
 
-* **drag a clip to reorder it, drag its edges to trim** (the positions recompute as you go), click it to open the
-  inspector — label, text on screen, ±0.2 s / ±1 s nudges, snap-to-speech, fill/fit, focus, follow-the-speaker, mute;
-* **Add clip** takes a piece of *any* analysed video — pick it from the sentence list of that video's transcript — so one
-  reel can draw on several shoots. Clips from another video are coloured differently on the track;
-* **Play the edit** runs the clips in order in the preview, with a playhead moving along the track;
-* **Render** stitches it through the storyboard renderer (one branded segment per clip) on the composer's queue, and
-  **Export** hands the same edit to Resolve / Premiere as FCPXML / EDL / SRT / JSON.
+* **Sources** lists every analysed video; opening one shows its AI-proposed cuts *and* its measured sentences, each a
+  click away from the timeline. That is how one reel ends up drawing on several shoots - clips from another video are a
+  different colour on the track.
+* **Timeline**: drag a clip to reorder, drag its edges to trim (released edges snap to sentence boundaries inside the
+  measured silence), click to select, **S** splits at the playhead, **D** duplicates, **⌫** removes, **+/−** zoom,
+  `fit` fits the edit to the width. A second lane shows the on-screen text of each clip, and the playhead can be
+  scrubbed anywhere on the ruler.
+* **Program monitor** plays the edit clip after clip with real transport (⏮ ◀◀ ▶ ▶▶), a running timecode and the
+  on-screen text burnt over the picture as it will appear.
+* **Inspector**: label, text on screen, ±0.2 s/±1 s nudges, snap-to-sentence, Auto/Fill/Fit, focus, follow-the-speaker
+  (face tracking for that clip), mute.
+* **Render** stitches it through the storyboard renderer; **Export** hands the same edit to Resolve or Premiere.
 
-Everything saves itself (`timelines` table; `POST /api/v1/timelines` to create one from a job's cuts, `PUT` to save,
-`POST …/clips` to add, `POST …/render`, `GET …/export`). Measured: four clips from two different videos, reordered,
-trimmed and one muted → a 43.6 s branded reel rendered in 14.7 s.
+It saves itself as you work (`timelines` table). API: `POST/GET/PUT/DELETE /api/v1/timelines`, `POST …/clips`,
+`POST …/render`, `GET …/export`, plus `POST /api/v1/jobs/{id}/track` for one clip's crop path. Measured: four clips from
+two videos, reordered, trimmed, one muted - a 43.6 s branded reel in 14.7 s; splitting a clip keeps the edit's length.
 
 ## Editing studio: tracked framing, the timeline, and getting out (V1.3)
 

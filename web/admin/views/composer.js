@@ -7,17 +7,26 @@ export const subtitle = 'analysed video → proposed cut → branded short';
 let root, ctx, SYSTEM = null, JOBS = [], JOBSIG = '', SEL = null, JOB = null, CUTS = null, CUT = null, DUR = 0, TPL = 'placeholder', RENDERS = [];
 const ED_FRAMING = () => ({ fit: 'auto', focus_x: 0.5, focus_y: 0.5 });
 let ED = blankEd(), FR = null, FOCUS_MANUAL = false, FR_REQ = 0, FR_TIMER = null, FR_IMG_KEY = '', LOOP = false, keyHandler = null;
-let TR = null, SNAP = true, TRACK = false, SNAP_TIMER = null;   // the measured transcript, and whether edges snap to its sentences
+let TR = null, SNAP = true, TRACK = false, SNAP_TIMER = null, WANT = null;   // the measured transcript, and whether edges snap to its sentences
 function blankEd() { return { cut_in: 0, cut_out: 0, captions: [], captions_enabled: true, lower_third: { name: '', role: '' }, title: '', cut_id: null, ...ED_FRAMING() }; }
 const $ = (s) => root && root.querySelector(s);
 const $$ = (s) => root ? [...root.querySelectorAll(s)] : [];
 
 export async function render(el, params, c) {
-  root = el; ctx = c; SEL = null; JOB = null; RENDERS = []; JOBSIG = '';
+  root = el; ctx = c; SEL = null; JOB = null; RENDERS = []; JOBSIG = ''; WANT = params[0] || null;
   try { SYSTEM = await api('/composer/system'); } catch (e) { root.innerHTML = `<div class="banner err">${icon('warn')}<div>${esc(e.message)}</div></div>`; return; }
   if (!SYSTEM.enabled) { root.innerHTML = `<div class="card"><div class="bd">${emptyState('movie', 'The Reels studio is switched off', 'set COMPOSER_ENABLED=true in .env and restart the API')}</div></div>`; return; }
   TPL = SYSTEM.template;
-  root.innerHTML = `<div class="studio">
+  root.innerHTML = `<div class="modes" id="modes"><button data-mode="edit" class="${MODE === 'edit' ? 'on' : ''}">${icon('layers', 's')}Timeline editor</button><button data-mode="cut" class="${MODE === 'cut' ? 'on' : ''}">${icon('cut', 's')}Quick single cut</button><span class="muted body-s" id="modehint"></span></div><div id="studiobody"></div>`;
+  $$('#modes button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+  await mountMode();
+}
+
+export async function tick() { if (!root || !SYSTEM || !SYSTEM.enabled || MODE === 'edit') return; await refreshJobs(); await refreshRenders(false); }
+export function destroy() { if (keyHandler) document.removeEventListener('keydown', keyHandler); keyHandler = null; clearTimeout(FR_TIMER); editor.unmount(); root = null; SEL = null; MODE = 'cut'; }
+
+let MODE = 'edit';   // the studio opens as an editor; the single-cut trimmer is the other tab
+const cutMarkup = () => `<div class="studio">
     <div class="stack"><div class="card"><div class="hd"><h3>Analysed videos</h3><span class="sp"></span><span class="tag" id="jobcount"></span></div><div class="bd flush list" id="jobs"><div class="loading"><span class="spin"></span></div></div></div>
       <div class="card"><div class="hd"><h3>Template &amp; output</h3></div><div class="bd"><select id="tpl"></select>
         <div class="chips" style="margin-top:12px" id="presets"><label class="chip on"><input type="checkbox" value="reels" checked hidden> Reels 9:16</label><label class="chip"><input type="checkbox" value="square" hidden> Feed 1:1</label><label class="chip"><input type="checkbox" value="landscape" hidden> YouTube 16:9</label></div>
@@ -30,28 +39,40 @@ export async function render(el, params, c) {
           <input type="file" id="upfile" accept=".png,.mov,.webm"><button class="btn tonal sm" id="upgo">${icon('upload', 's')}Upload</button><div class="msg" id="upmsg"></div></div></details>
       </div></div></div>
     <div class="stack" style="min-width:0">
-      <div class="modes" id="modes"><button class="on" data-mode="cut">${icon('cut', 's')}Cut one clip</button><button data-mode="edit">${icon('layers', 's')}Edit a timeline</button><span class="muted body-s">the AI fills the timeline in — you rearrange it</span></div>
-      <div class="card" id="editor"><div class="bd">${emptyState('cut', 'Pick an analysed video with a local file', 'YouTube-sourced videos have no file to cut')}</div></div>
+      <div class="modes" id="modes"><button data-mode="edit" class="on">${icon('layers', 's')}Timeline editor</button><button data-mode="cut">${icon('cut', 's')}Quick single cut</button><span class="muted body-s" id="modehint">the AI fills the timeline in — drag the clips to rearrange it</span></div>
+      <div class="card" id="editor"><div class="bd">${emptyState('layers', 'Pick an analysed video on the left', 'its proposed cuts land on the timeline, and you take it from there')}</div></div>
     </div>
     <div class="card rcol"><div class="hd"><h3>Renders</h3><span class="sp"></span><span class="tag" id="rcount"></span></div><div class="bd" id="renders"><div class="empty">No renders yet.</div></div></div>
   </div>`;
-  renderTemplates(); await refreshJobs();
-  $$('#modes button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
-  $$('#presets .chip').forEach((l) => l.onclick = (e) => { e.preventDefault(); const cb = l.querySelector('input'); cb.checked = !cb.checked; l.classList.toggle('on', cb.checked); previewTemplate(); syncRenderButton(); if (SEL) scheduleFraming(false, 0); });
-  $('#upgo').onclick = uploadLayer;
-  keyHandler = onKey; document.addEventListener('keydown', keyHandler);
-  const want = params[0]; if (want && JOBS.find((j) => j.id === want)) select(want); else if (want) toast('That video has no local file to cut', true);
-}
-export async function tick() { if (!root || !SYSTEM || !SYSTEM.enabled || MODE === 'edit') return; await refreshJobs(); await refreshRenders(false); }
-export function destroy() { if (keyHandler) document.removeEventListener('keydown', keyHandler); keyHandler = null; clearTimeout(FR_TIMER); editor.unmount(); root = null; SEL = null; MODE = 'cut'; }
-
-let MODE = 'cut';
 function setMode(m) {
   if (MODE === m) return;
   MODE = m;
   $$('#modes button').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
-  if (m === 'edit') { editor.unmount(); if (JOB) editor.mount($('#editor'), { job: JOB, jobs: JOBS, template: TPL, preset: selectedPresets()[0] || 'reels' }); else $('#editor').innerHTML = `<div class="bd">${emptyState('cut', 'Pick a video first', 'the edit starts from one video; you can add clips from others')}</div>`; }
-  else { editor.unmount(); if (SEL) { const keep = SEL; SEL = null; select(keep); } }
+  mountMode();
+}
+
+async function mountMode() {
+  const body = $('#studiobody'); if (!body) return;
+  const hint = $('#modehint'); if (hint) hint.textContent = MODE === 'edit' ? 'the AI fills the timeline in — drag the clips to rearrange it' : 'one window of one video, trimmed by hand';
+  editor.unmount();
+  if (keyHandler) { document.removeEventListener('keydown', keyHandler); keyHandler = null; }
+  if (MODE === 'edit') {
+    body.innerHTML = '';
+    if (!JOBS.length) { try { JOBS = (await api('/jobs')).filter((j) => j.source.kind !== 'online' && j.source.path); } catch { /* offline */ } }
+    const usable = JOBS.filter((j) => ['BLOCKS_COMPLETE', 'INDEXED', 'CONTENT_CANDIDATE'].includes(j.state));
+    JOB = JOBS.find((j) => j.id === (WANT || SEL)) || JOB || usable[0] || JOBS[0] || null;
+    SEL = JOB ? JOB.id : null;
+    if (JOB) history.replaceState(null, '', '#composer/' + JOB.id);
+    return editor.mount(body, { job: JOB, jobs: JOBS });
+  }
+  body.innerHTML = cutMarkup();
+  JOBSIG = '';
+  renderTemplates(); await refreshJobs();
+  $$('#presets .chip').forEach((l) => l.onclick = (e) => { e.preventDefault(); const cb = l.querySelector('input'); cb.checked = !cb.checked; l.classList.toggle('on', cb.checked); previewTemplate(); syncRenderButton(); if (SEL) scheduleFraming(false, 0); });
+  $('#upgo').onclick = uploadLayer;
+  keyHandler = onKey; document.addEventListener('keydown', keyHandler);
+  const want = WANT || SEL;
+  if (want && JOBS.find((j) => j.id === want)) { const keep = want; SEL = null; select(keep); }
 }
 
 const selectedPresets = () => $$('#presets input:checked').map((c) => c.value);

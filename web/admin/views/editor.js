@@ -1,345 +1,409 @@
-// The edit itself: a timeline of clips the AI filled in and you rearrange. Lives inside the Reels studio's Edit tab.
-import { api, post, put, del, esc, attr, icon, ts, toast, confirmDialog, openDialog, emptyState } from '../core.js';
+// The edit studio: sources on the left, the program monitor in the middle, the clip inspector on the right, and a real
+// timeline along the bottom. The AI fills the timeline in; everything after that is ordinary editing.
+import { api, post, put, del, esc, attr, icon, ts, toast, confirmDialog, emptyState } from '../core.js';
 
-let host = null, TL = null, SEL = null, JOB = null, JOBS = [], SAVE_T = null, RENDERS = [], POLL = null, PREVIEW = null, dirty = false;
+let host = null, TL = null, JOBS = [], JOB = null, SEL = null, SRC = null;       // SRC: the video open in the sources panel
+let PX = 24, HEAD = 0, PLAYING = false, TIMER = null, SAVE_T = null, POLL = null, dirty = false, SNAP = true, keys = null;
 const $ = (s) => host && host.querySelector(s);
 const $$ = (s) => host ? [...host.querySelectorAll(s)] : [];
 const clip = (id) => (TL ? TL.clips.find((c) => c.id === id) : null);
 const total = () => (TL ? TL.clips.reduce((a, c) => a + c.seconds, 0) : 0);
-const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}.${Math.floor((t % 1) * 10)}`;
+const tc = (t) => `${Math.floor(Math.max(0, t) / 60)}:${String(Math.floor(Math.max(0, t) % 60)).padStart(2, '0')}.${Math.floor((Math.max(0, t) % 1) * 10)}`;
+const starts = () => { let a = 0; return TL.clips.map((c) => { const s = a; a += c.seconds; return s; }); };
+const clipAt = (t) => { const st = starts(); for (let i = TL.clips.length - 1; i >= 0; i--) if (t >= st[i] - 1e-6) return { i, clip: TL.clips[i], start: st[i] }; return null; };
 
-/** Mount the editor for one job. `jobs` is the studio's list, so clips can come from any analysed video. */
-export async function mount(el, { job, jobs, template, preset }) {
-  host = el; JOB = job; JOBS = jobs || []; SEL = null; RENDERS = [];
-  host.innerHTML = `<div class="bd"><div class="loading"><span class="spin"></span> opening the edit…</div></div>`;
+export async function mount(el, { job, jobs }) {
+  host = el; JOB = job; JOBS = (jobs || []).filter((j) => j.source && j.source.path); SRC = job ? job.id : (JOBS[0] || {}).id;
+  SEL = null; HEAD = 0;
+  host.innerHTML = `<div class="nle"><div class="nle-loading"><span class="spin"></span> opening the edit…</div></div>`;
   let list = [];
-  try { list = await api('/timelines?job_id=' + encodeURIComponent(job.id)); } catch { /* no store */ }
-  if (list.length) await load(list[0].id);
-  else await create({ job_id: job.id, from_cuts: true, template, preset });
-}
-
-export function unmount() { clearTimeout(SAVE_T); clearTimeout(POLL); stopPreview(); host = null; TL = null; }
-
-async function create(body) {
-  try { TL = await post('/timelines', body); draw(); pollRenders(); }
-  catch (e) { host.innerHTML = `<div class="bd"><div class="banner err">${icon('warn')}<div>${esc(e.message)}</div></div></div>`; }
-}
-async function load(id) {
-  try { TL = await api('/timelines/' + id); draw(); pollRenders(); }
-  catch (e) { host.innerHTML = `<div class="bd"><div class="banner err">${icon('warn')}<div>${esc(e.message)}</div></div></div>`; }
-}
-
-function save(now) {
-  clearTimeout(SAVE_T); dirty = true; mark();
-  const go = async () => {
-    try {
-      const body = { title: TL.title, preset: TL.preset, template: TL.template, fit: TL.fit, audio: TL.audio, clips: TL.clips.map(strip) };
-      TL = await put('/timelines/' + TL.id, body); dirty = false; mark(); drawTrack(); drawInspector();
-    } catch (e) { toast(e.message, true); }
-  };
-  if (now) return go();
-  SAVE_T = setTimeout(go, 700);
-}
-const strip = (c) => { const { at, tracked, seconds, ...rest } = c; return rest; };   // `at`/`seconds`/`tracked` are derived
-function mark() { const m = $('#tlsaved'); if (m) { m.textContent = dirty ? 'saving…' : 'saved'; m.className = 'tag ' + (dirty ? '' : 'ok'); } }
-
-// ---------------------------------------------------------------- layout
-function draw() {
-  if (!host || !TL) return;
-  host.innerHTML = `<div class="bd edit">
-    <div class="row between ehead">
-      <input class="etitle" id="tltitle" value="${attr(TL.title)}" placeholder="name this edit">
-      <span class="tag" id="tlsaved">saved</span><span class="sp"></span>
-      <span class="muted body-s"><b id="tlen">${fmt(total())}</b> · ${TL.clips.length} clip${TL.clips.length === 1 ? '' : 's'} · ${TL.jobs.length} video${TL.jobs.length === 1 ? '' : 's'}</span>
-    </div>
-    <div class="row etools">
-      <button class="btn sm tonal" id="aicuts" title="put this video's proposed cuts on the timeline">${icon('spark', 's')}AI cuts</button>
-      <button class="btn sm tonal" id="addclip">${icon('add', 's')}Add clip</button>
-      <button class="btn sm" id="dupclip" disabled>${icon('layers', 's')}Duplicate</button>
-      <button class="btn sm danger" id="delclip" disabled>${icon('trash', 's')}Remove</button>
-      <span class="sp"></span>
-      <select id="tlpreset" title="output format">${[['reels', 'Reel 9:16'], ['square', 'Square 1:1'], ['landscape', 'YouTube 16:9']].map(([k, l]) => `<option value="${k}" ${TL.preset === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      <button class="btn sm filled" id="tlrender">${icon('movie', 's')}Render</button>
-      <span class="exp"><button class="btn sm" title="hand this edit to another editor">${icon('open', 's')}Export</button><span class="menu">
-        <a href="/api/v1/timelines/${esc(TL.id)}/export?format=fcpxml">FCPXML · Resolve / Final Cut</a>
-        <a href="/api/v1/timelines/${esc(TL.id)}/export?format=edl">EDL · Premiere, Avid</a>
-        <a href="/api/v1/timelines/${esc(TL.id)}/export?format=srt">SRT · captions</a>
-        <a href="/api/v1/timelines/${esc(TL.id)}/export?format=json">JSON · the raw edit</a></span></span>
-    </div>
-    <div class="eprev"><video id="epv" preload="metadata" playsinline></video>
-      <div class="ctl"><button class="btn sm" id="eplay">${icon('play', 's')}Play the edit</button><span class="muted body-s" id="epos">0:00.0 / ${fmt(total())}</span><span class="sp"></span><span class="muted body-s" id="epclip"></span></div></div>
-    <div class="ruler" id="ruler"></div>
-    <div class="track" id="track"></div>
-    <div class="muted body-s" style="margin-top:6px">Drag a clip to reorder · drag its edges to trim · click to edit it below. Everything saves itself.</div>
-    <div id="insp"></div>
-    <div id="tlrenders" class="tlrenders"></div>
-  </div>`;
-  $('#tltitle').oninput = (e) => { TL.title = e.target.value; save(); };
-  $('#tlpreset').onchange = (e) => { TL.preset = e.target.value; save(true); };
-  $('#aicuts').onclick = aiCuts;
-  $('#addclip').onclick = addClipDialog;
-  $('#delclip').onclick = removeSelected;
-  $('#dupclip').onclick = duplicateSelected;
-  $('#tlrender').onclick = renderNow;
-  $('#eplay').onclick = togglePreview;
-  drawTrack(); drawInspector();
-}
-
-function drawTrack() {
-  const el = $('#track'); if (!el) return;
-  const secs = total() || 1;
-  if (!TL.clips.length) {
-    el.innerHTML = `<div class="emptytrack">${emptyState('cut', 'Nothing on the timeline yet', 'press “AI cuts” to let the system propose the moments, or “Add clip”')}</div>`;
-    $('#ruler').innerHTML = ''; return;
+  try { list = await api('/timelines' + (job ? '?job_id=' + encodeURIComponent(job.id) : '')); } catch { /* no store */ }
+  try {
+    TL = list.length ? await api('/timelines/' + list[0].id)
+      : await post('/timelines', { job_id: job ? job.id : null, from_cuts: !!job, title: job ? job.source.name : 'New edit' });
+  } catch (e) {
+    // the chosen video's file is gone (or it came from a link): start an empty edit and let the sources panel fill it
+    try { TL = await post('/timelines', { title: 'New edit' }); toast(e.message, true); }
+    catch (err) { host.innerHTML = `<div class="nle"><div class="banner err" style="margin:16px">${icon('warn')}<div>${esc(err.message)}</div></div></div>`; return; }
   }
-  let at = 0;
-  el.innerHTML = TL.clips.map((c, i) => {
-    const left = 100 * at / secs, w = 100 * c.seconds / secs; at += c.seconds;
-    const kind = c.kind === 'clip' ? (c.job_id === (JOB && JOB.id) ? '' : ' other') : ' still';
-    return `<div class="cl${kind}${c.id === SEL ? ' sel' : ''}" data-id="${attr(c.id)}" data-i="${i}" style="left:${left}%;width:${w}%" title="${attr((c.label || 'clip') + '\n' + ts(c.in_seconds) + ' → ' + ts(c.out_seconds))}">
+  draw(); fitZoom(); bindKeys(); pollRenders();
+}
+
+export function unmount() {
+  stop(); clearTimeout(SAVE_T); clearTimeout(POLL);
+  if (keys) document.removeEventListener('keydown', keys);
+  keys = null; host = null; TL = null; SEL = null;
+}
+
+// ---------------------------------------------------------------- shell
+function draw() {
+  host.innerHTML = `<div class="nle">
+    <div class="nle-top">
+      <aside class="pane src"><div class="ph"><b>Sources</b><span class="sp"></span><span class="muted body-s">${JOBS.length} videos</span></div><div class="pb" id="srcbody"></div></aside>
+      <section class="pane mon">
+        <div class="ph"><input class="etitle" id="tltitle" value="${attr(TL.title)}" placeholder="name this edit"><span class="tag" id="saved">saved</span><span class="sp"></span>
+          <select id="preset" title="output format">${[['reels', '9:16'], ['square', '1:1'], ['landscape', '16:9']].map(([k, l]) => `<option value="${k}" ${TL.preset === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          <button class="btn sm filled" id="render">${icon('movie', 's')}Render</button>
+          <span class="exp"><button class="btn sm" title="hand this edit to another editor">${icon('open', 's')}Export</button><span class="menu">
+            <a href="/api/v1/timelines/${esc(TL.id)}/export?format=fcpxml">FCPXML · Resolve / Final Cut</a>
+            <a href="/api/v1/timelines/${esc(TL.id)}/export?format=edl">EDL · Premiere, Avid</a>
+            <a href="/api/v1/timelines/${esc(TL.id)}/export?format=srt">SRT · captions</a>
+            <a href="/api/v1/timelines/${esc(TL.id)}/export?format=json">JSON · the raw edit</a></span></span></div>
+        <div class="screen"><video id="pv" preload="metadata" playsinline></video><div class="burn" id="burn"></div></div>
+        <div class="transport">
+          <button class="btn sm" id="tstart" title="start (Home)">⏮</button>
+          <button class="btn sm" id="tprev" title="previous clip (↑)">◀◀</button>
+          <button class="btn sm filled" id="tplay" title="play / pause (space)">${icon('play', 's')}</button>
+          <button class="btn sm" id="tnext" title="next clip (↓)">▶▶</button>
+          <span class="tcbox"><b id="tcnow">0:00.0</b> / <span id="tctot">0:00.0</span></span>
+          <span class="sp"></span><span class="muted body-s" id="tclip"></span></div>
+      </section>
+      <aside class="pane insp"><div class="ph"><b>Clip</b><span class="sp"></span><span class="muted body-s" id="inspid"></span></div><div class="pb" id="inspbody"></div></aside>
+    </div>
+    <div class="nle-tl">
+      <div class="tlbar">
+        <button class="btn xs" id="bsplit" title="split at the playhead (S)">${icon('cut', 's')}Split</button>
+        <button class="btn xs" id="bdup" title="duplicate (D)">${icon('layers', 's')}Duplicate</button>
+        <button class="btn xs danger" id="bdel" title="remove (⌫)">${icon('trash', 's')}Remove</button>
+        <span class="divider"></span>
+        <button class="btn xs" id="baicuts" title="add this video's proposed cuts">${icon('spark', 's')}AI cuts</button>
+        <label class="check xs" title="edges stick to clip boundaries and sentence ends"><input type="checkbox" id="bsnap" checked> snap</label>
+        <span class="sp"></span>
+        <span class="muted body-s" id="tlstat"></span>
+        <button class="btn xs" id="zout" title="zoom out">−</button><button class="btn xs" id="zin" title="zoom in">+</button><button class="btn xs" id="zfit" title="fit">fit</button>
+      </div>
+      <div class="tlscroll" id="tlscroll"><div class="tlinner" id="tlinner">
+        <div class="ruler" id="ruler"></div>
+        <div class="trk v" id="trkv"></div>
+        <div class="trk t" id="trkt"></div>
+        <div class="head" id="head"></div>
+      </div></div>
+    </div>
+    <div id="renders" class="tlrenders"></div></div>`;
+
+  $('#tltitle').oninput = (e) => { TL.title = e.target.value; save(); };
+  $('#preset').onchange = (e) => { TL.preset = e.target.value; save(true); };
+  $('#render').onclick = renderNow;
+  $('#tplay').onclick = toggle;
+  $('#tstart').onclick = () => seek(0);
+  $('#tprev').onclick = () => { const st = starts(); const prev = [...st].reverse().find((s) => s < HEAD - 0.05); seek(prev ?? 0); };
+  $('#tnext').onclick = () => { const next = starts().find((s) => s > HEAD + 0.05); seek(next ?? total()); };
+  $('#bsplit').onclick = split; $('#bdup').onclick = duplicate; $('#bdel').onclick = remove;
+  $('#baicuts').onclick = aiCuts;
+  $('#bsnap').onchange = (e) => { SNAP = e.target.checked; };
+  $('#zin').onclick = () => zoom(1.5); $('#zout').onclick = () => zoom(1 / 1.5); $('#zfit').onclick = fitZoom;
+  $('#tlscroll').addEventListener('wheel', (e) => { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); zoom(e.deltaY < 0 ? 1.12 : 1 / 1.12); }, { passive: false });
+  drawSources(); drawTimeline(); drawInspector();
+}
+
+// ---------------------------------------------------------------- sources
+async function drawSources() {
+  const el = $('#srcbody'); if (!el) return;
+  el.innerHTML = JOBS.map((j) => `<div class="srcjob ${j.id === SRC ? 'open' : ''}" data-j="${attr(j.id)}">
+      <div class="row"><span class="avatar sm">${icon('video')}</span><div class="grow"><div class="t ellipsis" title="${attr(j.source.name)}">${esc(j.source.name)}</div>
+      <div class="muted body-s">${j.source.duration_seconds ? ts(j.source.duration_seconds) : '–'} · ${(j.block_counts || {}).quotes ?? 0} quotes</div></div>${icon('chevron')}</div>
+      <div class="srcbody" id="sb-${attr(j.id)}"></div></div>`).join('') || emptyState('video', 'No analysed videos with a local file');
+  $$('.srcjob .row').forEach((n) => n.onclick = () => openSource(n.parentElement.dataset.j));
+  if (SRC) openSource(SRC, true);
+}
+
+async function openSource(id, keep) {
+  SRC = (SRC === id && !keep) ? null : id;
+  $$('.srcjob').forEach((n) => n.classList.toggle('open', n.dataset.j === SRC));
+  if (!SRC) return;
+  const box = $('#sb-' + SRC); if (!box) return;
+  box.innerHTML = '<div class="loading"><span class="spin"></span></div>';
+  const [cuts, tr] = await Promise.all([api('/jobs/' + SRC + '/cuts').catch(() => ({ cuts: [] })), api('/jobs/' + SRC + '/transcript').catch(() => ({ ready: false }))]);
+  const cutRows = (cuts.cuts || []).map((c) => `<div class="srcitem" data-a="${c.in_seconds}" data-b="${c.out_seconds}" data-l="${attr(c.title.slice(0, 60))}">
+      <span class="tag ${esc(c.source)}">${esc(c.source).replace('_', ' ')}</span><span class="grow ellipsis" title="${attr(c.title)}">${esc(c.title)}</span>
+      <span class="muted body-s mono">${c.duration.toFixed(0)}s</span><button class="btn xs tonal">+</button></div>`).join('');
+  const sentRows = (tr.ready ? tr.sentences : []).map((s) => `<div class="srcitem sent" data-a="${s.start}" data-b="${s.end}" data-l="${attr(s.text.slice(0, 50))}">
+      <span class="mono muted body-s">${ts(s.start)}</span><span class="grow ellipsis" title="${attr(s.text)}">${esc(s.text)}</span>
+      <span class="muted body-s mono">${(s.end - s.start).toFixed(1)}s</span><button class="btn xs tonal">+</button></div>`).join('');
+  box.innerHTML = `${cutRows ? `<div class="overline">Proposed by the AI</div>${cutRows}` : ''}
+    ${sentRows ? `<div class="overline" style="margin-top:10px">Sentences${tr.ready ? '' : ''}</div><div class="sentscroll">${sentRows}</div>`
+      : '<div class="muted body-s" style="padding:6px 0">No measured sentences for this video yet.</div>'}`;
+  box.querySelectorAll('.srcitem').forEach((n) => n.onclick = () => addClip(SRC, +n.dataset.a, +n.dataset.b, n.dataset.l));
+}
+
+async function addClip(job_id, a, b, label) {
+  try { TL = await post(`/timelines/${TL.id}/clips`, { job_id, in_seconds: a, out_seconds: b, label }); drawTimeline(); fitZoom(); toast('Added to the timeline'); }
+  catch (e) { toast(e.message, true); }
+}
+
+async function aiCuts() {
+  if (!SRC) return toast('Open a video in Sources first', true);
+  const cuts = await api('/jobs/' + SRC + '/cuts').catch(() => ({ cuts: [] }));
+  let n = 0;
+  for (const c of cuts.cuts || []) {
+    if (TL.clips.some((x) => x.job_id === SRC && Math.abs(x.in_seconds - c.in_seconds) < 0.5)) continue;
+    TL = await post(`/timelines/${TL.id}/clips`, { job_id: SRC, in_seconds: c.in_seconds, out_seconds: c.out_seconds, label: c.title.slice(0, 60) });
+    n++;
+  }
+  drawTimeline(); fitZoom();
+  toast(n ? `${n} cut${n === 1 ? '' : 's'} added` : 'Already on the timeline');
+}
+
+// ---------------------------------------------------------------- the timeline
+function zoom(f) { PX = Math.max(2, Math.min(400, PX * f)); drawTimeline(); }
+function fitZoom() { const w = $('#tlscroll') ? $('#tlscroll').clientWidth - 24 : 900; PX = Math.max(2, w / Math.max(4, total())); drawTimeline(); }
+
+function drawTimeline() {
+  if (!TL || !$('#trkv')) return;
+  const secs = total(), w = Math.max(200, secs * PX);
+  $('#tlinner').style.width = w + 'px';
+  $('#tlstat').textContent = `${TL.clips.length} clips · ${tc(secs)} · ${TL.jobs.length} source${TL.jobs.length === 1 ? '' : 's'}`;
+  $('#tctot').textContent = tc(secs);
+
+  const step = PX > 60 ? 1 : PX > 24 ? 5 : PX > 8 ? 10 : 30;
+  let marks = '';
+  for (let t = 0; t <= secs + 0.01; t += step) marks += `<span style="left:${t * PX}px">${tc(t).replace(/\.\d$/, '')}</span>`;
+  $('#ruler').innerHTML = marks;
+
+  const st = starts();
+  $('#trkv').innerHTML = TL.clips.map((c, i) => {
+    const other = c.job_id && JOB && c.job_id !== JOB.id;
+    return `<div class="cl${other ? ' other' : ''}${c.kind !== 'clip' ? ' still' : ''}${c.id === SEL ? ' sel' : ''}" data-id="${attr(c.id)}" data-i="${i}"
+      style="left:${st[i] * PX}px;width:${Math.max(6, c.seconds * PX - 2)}px" title="${attr((c.label || 'clip') + '\n' + ts(c.in_seconds) + ' → ' + ts(c.out_seconds))}">
       <span class="h l" data-edge="in"></span>
-      <span class="body"><b>${esc(c.label || 'clip')}</b><span class="k">${c.seconds.toFixed(1)}s${c.mute ? ' · muted' : ''}${c.track && c.track.length ? ' · tracked' : ''}${c.text ? ' · text' : ''}</span></span>
+      <span class="body"><b>${esc(c.label || 'clip')}</b><span class="k">${c.seconds.toFixed(1)}s${c.mute ? ' · muted' : ''}${(c.track || []).length ? ' · tracked' : ''}</span></span>
       <span class="h r" data-edge="out"></span></div>`;
-  }).join('') + '<div class="php" id="php" hidden></div>';
-  const marks = [];
-  for (let t = 0; t <= secs; t += secs > 120 ? 30 : secs > 40 ? 10 : 5) marks.push(`<span style="left:${100 * t / secs}%">${fmt(t).replace(/\.\d$/, '')}</span>`);
-  $('#ruler').innerHTML = marks.join('');
-  $('#tlen').textContent = fmt(secs);
+  }).join('');
+  $('#trkt').innerHTML = TL.clips.map((c, i) => (c.text || (c.captions || []).length)
+    ? `<div class="txt" data-id="${attr(c.id)}" style="left:${st[i] * PX}px;width:${Math.max(6, c.seconds * PX - 2)}px" title="${attr(c.text || (c.captions[0] || {}).text || '')}">${esc(c.text || (c.captions[0] || {}).text || '')}</div>`
+    : '').join('');
+  moveHead();
   bindTrack();
 }
 
-// ---------------------------------------------------------------- dragging: reorder and trim
 function bindTrack() {
-  const track = $('#track'); if (!track) return;
-  let mode = null, startX = 0, id = null, from = 0, base = null;
-  const secsPerPx = () => (total() || 1) / Math.max(1, track.getBoundingClientRect().width);
+  const inner = $('#tlinner'), trk = $('#trkv');
+  let mode = null, id = null, startX = 0, base = null;
+  const atX = (e) => Math.max(0, (e.clientX - inner.getBoundingClientRect().left) / PX);
 
-  track.querySelectorAll('.cl').forEach((n) => {
+  trk.querySelectorAll('.cl').forEach((n) => {
     n.addEventListener('pointerdown', (e) => {
       const c = clip(n.dataset.id); if (!c) return;
-      select(n.dataset.id);
+      e.stopPropagation(); select(c.id);
       mode = e.target.dataset.edge ? 'trim:' + e.target.dataset.edge : 'move';
-      id = c.id; startX = e.clientX; from = +n.dataset.i; base = { ...c };
-      n.setPointerCapture(e.pointerId); n.classList.add('dragging');
-      e.preventDefault();
+      id = c.id; startX = e.clientX; base = { ...c };
+      try { n.setPointerCapture(e.pointerId); } catch { /* a synthetic or already-released pointer */ }
+      n.classList.add('dragging');
     });
     n.addEventListener('pointermove', (e) => {
       if (!mode || id !== n.dataset.id) return;
-      const dt = (e.clientX - startX) * secsPerPx();
-      const c = clip(id); if (!c) return;
-      if (mode === 'trim:in') {
-        c.in_seconds = Math.max(0, Math.min(base.in_seconds + dt, c.out_seconds - 0.4));
-      } else if (mode === 'trim:out') {
-        c.out_seconds = Math.max(c.in_seconds + 0.4, base.out_seconds + dt);
-      } else {
-        const w = track.getBoundingClientRect();
-        const x = e.clientX - w.left;
-        let acc = 0, target = TL.clips.length - 1;
-        for (let i = 0; i < TL.clips.length; i++) { acc += TL.clips[i].seconds; if (x < (acc / (total() || 1)) * w.width) { target = i; break; } }
-        if (target !== TL.clips.indexOf(c)) { TL.clips.splice(TL.clips.indexOf(c), 1); TL.clips.splice(target, 0, c); recompute(); drawTrack(); return; }
+      const c = clip(id), dt = (e.clientX - startX) / PX;
+      if (mode === 'trim:in') c.in_seconds = Math.max(0, Math.min(base.in_seconds + dt, c.out_seconds - 0.3));
+      else if (mode === 'trim:out') c.out_seconds = Math.max(c.in_seconds + 0.3, base.out_seconds + dt);
+      else {
+        const x = atX(e), st = starts(); let target = TL.clips.length - 1;
+        for (let i = 0; i < TL.clips.length; i++) if (x < st[i] + TL.clips[i].seconds / 2) { target = i; break; }
+        const cur = TL.clips.indexOf(c);
+        if (target !== cur) { TL.clips.splice(cur, 1); TL.clips.splice(target, 0, c); }
       }
-      recompute(); drawTrack();
+      recompute(); drawTimeline();
     });
-    const end = () => { if (!mode) return; mode = null; save(); drawInspector(); };
+    const end = () => { if (!mode) return; mode = null; n.classList.remove('dragging'); if (SNAP) snapClip(clip(id)); save(); drawInspector(); };
     n.addEventListener('pointerup', end); n.addEventListener('pointercancel', end);
+    n.addEventListener('dblclick', () => { const c = clip(n.dataset.id); if (c) { seek(starts()[TL.clips.indexOf(c)]); play(); } });
   });
-  track.onclick = (e) => { if (e.target === track) select(null); };
+
+  // the playhead: click or drag anywhere on the ruler or empty track
+  const scrub = (e) => { seek(Math.min(total(), Math.max(0, (e.clientX - inner.getBoundingClientRect().left) / PX))); };
+  [$('#ruler'), $('#trkv'), $('#trkt')].forEach((lane) => {
+    lane.addEventListener('pointerdown', (e) => { if (e.target.closest('.cl') || e.target.closest('.txt')) return; stop(); scrub(e); try { lane.setPointerCapture(e.pointerId); } catch { /* ignore */ } lane.dataset.scrub = '1'; });
+    lane.addEventListener('pointermove', (e) => { if (lane.dataset.scrub) scrub(e); });
+    const stopScrub = () => delete lane.dataset.scrub;
+    lane.addEventListener('pointerup', stopScrub); lane.addEventListener('pointercancel', stopScrub);
+  });
 }
 
-function recompute() {
-  let at = 0;
-  TL.clips.forEach((c) => { c.seconds = Math.round((c.out_seconds - c.in_seconds) * 1000) / 1000; c.at = Math.round(at * 1000) / 1000; at += c.seconds; });
+async function snapClip(c) {
+  if (!c || !c.job_id) return;
+  try {
+    const d = await api(`/jobs/${c.job_id}/snap?cut_in=${c.in_seconds}&cut_out=${c.out_seconds}`);
+    if (d.snapped) { c.in_seconds = d.cut_in; c.out_seconds = d.cut_out; recompute(); drawTimeline(); save(); }
+  } catch { /* no transcript: leave it where the editor put it */ }
 }
+
+function recompute() { TL.clips.forEach((c) => { c.seconds = Math.round((c.out_seconds - c.in_seconds) * 1000) / 1000; }); }
 
 function select(id) {
   SEL = id;
   $$('.cl').forEach((n) => n.classList.toggle('sel', n.dataset.id === id));
-  const has = !!clip(id);
-  ['#delclip', '#dupclip'].forEach((s) => { const b = $(s); if (b) b.disabled = !has; });
   drawInspector();
-  const c = clip(id), v = $('#epv');
-  if (c && v && c.job_id) { if (!v.src.includes(c.job_id)) v.src = `/api/v1/jobs/${c.job_id}/media`; v.currentTime = c.in_seconds; }
+  const c = clip(id);
+  if (c) { const i = TL.clips.indexOf(c); seek(starts()[i] + 0.01, true); }
 }
 
-// ---------------------------------------------------------------- the clip inspector
-function drawInspector() {
-  const el = $('#insp'); if (!el) return;
-  const c = clip(SEL);
-  if (!c) { el.innerHTML = `<div class="inspector empty-i">${TL.clips.length ? 'Click a clip on the timeline to edit it.' : ''}</div>`; return; }
-  const job = JOBS.find((j) => j.id === c.job_id);
-  el.innerHTML = `<div class="inspector">
-    <div class="row between"><span class="overline">${esc(c.label || 'clip')}</span><span class="muted body-s mono">${esc((job && job.source.name) || c.job_id || 'still')} · ${ts(c.in_seconds)} → ${ts(c.out_seconds)}</span></div>
-    <div class="g2 even" style="margin-top:10px;gap:16px">
-      <div>
-        <div class="field"><label>Label</label><input type="text" id="ilabel" value="${attr(c.label || '')}"></div>
-        <div class="field" style="margin-top:8px"><label>Text on screen (optional)</label><input type="text" id="itext" value="${attr(c.text || '')}" placeholder="a few words, burned into this clip"></div>
-        <div class="row gap4" style="margin-top:10px"><span class="muted body-s">IN</span>
-          ${[-1, -0.2, 0.2, 1].map((d) => `<button class="btn xs tonal" data-nudge="in" data-d="${d}">${d > 0 ? '+' : ''}${d}</button>`).join('')}</div>
-        <div class="row gap4" style="margin-top:6px"><span class="muted body-s">OUT</span>
-          ${[-1, -0.2, 0.2, 1].map((d) => `<button class="btn xs tonal" data-nudge="out" data-d="${d}">${d > 0 ? '+' : ''}${d}</button>`).join('')}</div>
-        <div class="row gap4" style="margin-top:10px"><button class="btn xs" id="isnap" title="move both edges onto sentence boundaries">${icon('spark', 's')}snap to speech</button><button class="btn xs" id="iplay">${icon('play', 's')}play this clip</button></div>
-      </div>
-      <div>
-        <div class="seg" id="ifit">${[['auto', 'Auto'], ['cover', 'Fill'], ['contain', 'Fit']].map(([k, l]) => `<label><input type="radio" name="ifit" value="${k}" ${(c.fit || 'auto') === k ? 'checked' : ''}>${l}</label>`).join('')}</div>
-        <div class="row" style="margin-top:10px"><span class="muted body-s">focus</span><input type="range" id="ifocus" min="0" max="100" value="${Math.round((c.focus_x ?? 0.5) * 100)}" style="flex:1"></div>
-        <label class="check" style="margin-top:8px"><input type="checkbox" id="itrack" ${c.track && c.track.length ? 'checked' : ''}> follow the speaker ${c.track && c.track.length ? `<span class="tag ok">${c.track.length} keys</span>` : ''}</label>
-        <label class="check" style="margin-top:8px"><input type="checkbox" id="imute" ${c.mute ? 'checked' : ''}> mute this clip</label>
-        <div class="muted body-s" style="margin-top:10px">${c.captions && c.captions.length ? `${c.captions.length} caption cue${c.captions.length === 1 ? '' : 's'} carried from the transcript` : 'no captions on this clip'}</div>
-      </div>
-    </div></div>`;
-  $('#ilabel').oninput = (e) => { c.label = e.target.value; save(); };
-  $('#itext').oninput = (e) => { c.text = e.target.value || null; save(); };
-  $$('[data-nudge]').forEach((b) => b.onclick = () => {
-    const d = +b.dataset.d;
-    if (b.dataset.nudge === 'in') c.in_seconds = Math.max(0, Math.min(c.in_seconds + d, c.out_seconds - 0.4));
-    else c.out_seconds = Math.max(c.in_seconds + 0.4, c.out_seconds + d);
-    recompute(); drawTrack(); drawInspector(); save();
-  });
-  $('#isnap').onclick = async () => {
-    try {
-      const d = await api(`/jobs/${c.job_id}/snap?cut_in=${c.in_seconds}&cut_out=${c.out_seconds}`);
-      if (d.snapped) { c.in_seconds = d.cut_in; c.out_seconds = d.cut_out; recompute(); drawTrack(); drawInspector(); save(true); toast(d.ends_open ? 'Snapped — but it still ends mid-thought' : 'Snapped to the sentence'); }
-      else toast('This video has no measured word timings yet', true);
-    } catch (e) { toast(e.message, true); }
+// ---------------------------------------------------------------- playhead + program monitor
+function moveHead() {
+  const h = $('#head'); if (!h) return;
+  h.style.left = (HEAD * PX) + 'px';
+  $('#tcnow').textContent = tc(HEAD);
+  const at = clipAt(HEAD);
+  $('#tclip').textContent = at ? `clip ${at.i + 1}/${TL.clips.length} · ${at.clip.label || ''}`.slice(0, 60) : '';
+  const burn = $('#burn'); if (burn) { burn.textContent = at && at.clip.text ? at.clip.text : ''; burn.hidden = !(at && at.clip.text); }
+}
+
+function seek(t, keepPlaying) {
+  HEAD = Math.max(0, Math.min(total(), t));
+  const at = clipAt(HEAD), v = $('#pv');
+  if (at && v) {
+    const want = `/api/v1/jobs/${at.clip.job_id}/media`;
+    const offset = at.clip.in_seconds + (HEAD - at.start);
+    if (!v.src.endsWith(want)) { v.src = want; v.addEventListener('loadedmetadata', () => { v.currentTime = offset; }, { once: true }); }
+    else v.currentTime = offset;
+  }
+  if (!keepPlaying) { /* scrubbing stops nothing else */ }
+  moveHead();
+  const sc = $('#tlscroll');
+  if (sc) { const x = HEAD * PX; if (x < sc.scrollLeft + 40 || x > sc.scrollLeft + sc.clientWidth - 60) sc.scrollLeft = Math.max(0, x - sc.clientWidth / 3); }
+}
+
+function play() {
+  const v = $('#pv'); if (!v || !TL.clips.length) return;
+  PLAYING = true; $('#tplay').innerHTML = icon('pause', 's');
+  if (HEAD >= total() - 0.05) HEAD = 0;
+  seek(HEAD, true);
+  v.play().catch(() => { stop(); toast('The browser blocked playback — press play once more', true); });
+  clearInterval(TIMER);
+  TIMER = setInterval(() => {
+    const at = clipAt(HEAD); if (!at) return stop();
+    const pos = v.currentTime - at.clip.in_seconds;
+    HEAD = at.start + Math.max(0, pos);
+    if (pos >= at.clip.seconds - 0.03 || v.ended) {
+      const next = at.i + 1;
+      if (next >= TL.clips.length) { HEAD = total(); moveHead(); return stop(); }
+      HEAD = starts()[next] + 0.001; seek(HEAD, true); v.play().catch(() => {});
+      return;
+    }
+    if (HEAD > total()) return stop();
+    moveHead();
+  }, 60);
+}
+function stop() { PLAYING = false; clearInterval(TIMER); TIMER = null; const v = $('#pv'); if (v) v.pause(); const b = $('#tplay'); if (b) b.innerHTML = icon('play', 's'); }
+function toggle() { PLAYING ? stop() : play(); }
+
+// ---------------------------------------------------------------- editing operations
+function split() {
+  const at = clipAt(HEAD); if (!at) return toast('Put the playhead over a clip first', true);
+  const offset = HEAD - at.start;
+  if (offset < 0.3 || offset > at.clip.seconds - 0.3) return toast('Too close to the edge to split', true);
+  const left = at.clip, right = { ...left, id: undefined, in_seconds: left.in_seconds + offset, label: (left.label || 'clip') + ' (b)' };
+  delete right.id;
+  left.out_seconds = left.in_seconds + offset; left.label = (left.label || 'clip').replace(/ \(b\)$/, '') + ' (a)';
+  TL.clips.splice(at.i + 1, 0, right); recompute(); drawTimeline(); save(true); toast('Split');
+}
+function duplicate() {
+  const c = clip(SEL); if (!c) return;
+  const copy = { ...c, label: (c.label || 'clip') + ' copy' }; delete copy.id;
+  TL.clips.splice(TL.clips.indexOf(c) + 1, 0, copy); recompute(); drawTimeline(); save(true);
+}
+async function remove() {
+  const c = clip(SEL); if (!c) return;
+  if (!(await confirmDialog({ title: 'Remove this clip?', body: 'Only from this edit — the video is untouched.', ok: 'Remove', danger: true }))) return;
+  TL.clips = TL.clips.filter((x) => x.id !== c.id); SEL = null; recompute(); drawTimeline(); drawInspector(); save(true);
+}
+
+function bindKeys() {
+  keys = (e) => {
+    if (!host || (e.target && e.target.matches && e.target.matches('input,textarea,select,[contenteditable]'))) return;
+    const k = e.key.toLowerCase();
+    if (k === ' ') { e.preventDefault(); toggle(); }
+    else if (k === 's') { e.preventDefault(); split(); }
+    else if (k === 'd') { e.preventDefault(); duplicate(); }
+    else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); remove(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); stop(); seek(HEAD - (e.shiftKey ? 1 : 0.2)); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); stop(); seek(HEAD + (e.shiftKey ? 1 : 0.2)); }
+    else if (e.key === 'Home') seek(0);
+    else if (k === '+' || k === '=') zoom(1.5);
+    else if (k === '-') zoom(1 / 1.5);
   };
-  $('#iplay').onclick = () => playRange(c);
+  document.addEventListener('keydown', keys);
+}
+
+// ---------------------------------------------------------------- inspector
+function drawInspector() {
+  const el = $('#inspbody'); if (!el) return;
+  const c = clip(SEL);
+  $('#inspid').textContent = c ? `${c.seconds.toFixed(1)}s` : '';
+  if (!c) { el.innerHTML = `<div class="muted body-s" style="padding:14px 2px">Select a clip on the timeline.<br><br>Keys: <kbd>space</kbd> play · <kbd>S</kbd> split · <kbd>D</kbd> duplicate · <kbd>⌫</kbd> remove · <kbd>←</kbd>/<kbd>→</kbd> step · <kbd>+</kbd>/<kbd>−</kbd> zoom</div>`; return; }
+  const job = JOBS.find((j) => j.id === c.job_id);
+  el.innerHTML = `<div class="field"><label>Label</label><input type="text" id="ilabel" value="${attr(c.label || '')}"></div>
+    <div class="muted body-s mono" style="margin:6px 0 10px">${esc((job && job.source.name) || c.job_id || 'still')}<br>${ts(c.in_seconds)} → ${ts(c.out_seconds)}</div>
+    <div class="field"><label>Text on screen</label><input type="text" id="itext" value="${attr(c.text || '')}" placeholder="a few words"></div>
+    <div class="row gap4" style="margin-top:10px"><span class="muted body-s" style="width:28px">IN</span>${[-1, -0.2, 0.2, 1].map((d) => `<button class="btn xs tonal" data-n="in" data-d="${d}">${d > 0 ? '+' : ''}${d}</button>`).join('')}</div>
+    <div class="row gap4" style="margin-top:4px"><span class="muted body-s" style="width:28px">OUT</span>${[-1, -0.2, 0.2, 1].map((d) => `<button class="btn xs tonal" data-n="out" data-d="${d}">${d > 0 ? '+' : ''}${d}</button>`).join('')}</div>
+    <button class="btn xs" id="isnap" style="margin-top:8px">${icon('spark', 's')}snap to the sentence</button>
+    <div class="overline" style="margin-top:16px">Framing</div>
+    <div class="seg" id="ifit" style="margin-top:6px">${[['auto', 'Auto'], ['cover', 'Fill'], ['contain', 'Fit']].map(([k, l]) => `<label><input type="radio" name="ifit" value="${k}" ${(c.fit || 'auto') === k ? 'checked' : ''}>${l}</label>`).join('')}</div>
+    <div class="row" style="margin-top:8px"><span class="muted body-s">focus</span><input type="range" id="ifocus" min="0" max="100" value="${Math.round((c.focus_x ?? 0.5) * 100)}" style="flex:1"></div>
+    <label class="check" style="margin-top:8px"><input type="checkbox" id="itrack" ${(c.track || []).length ? 'checked' : ''}> follow the speaker${(c.track || []).length ? ` <span class="tag ok">${c.track.length}</span>` : ''}</label>
+    <div class="overline" style="margin-top:16px">Audio</div>
+    <label class="check" style="margin-top:6px"><input type="checkbox" id="imute" ${c.mute ? 'checked' : ''}> mute this clip</label>
+    <div class="muted body-s" style="margin-top:10px">${(c.captions || []).length ? `${c.captions.length} caption cue${c.captions.length === 1 ? '' : 's'}` : 'no captions'}</div>`;
+  $('#ilabel').oninput = (e) => { c.label = e.target.value; save(); drawTimeline(); };
+  $('#itext').oninput = (e) => { c.text = e.target.value || null; save(); drawTimeline(); };
+  $$('[data-n]').forEach((b) => b.onclick = () => {
+    const d = +b.dataset.d;
+    if (b.dataset.n === 'in') c.in_seconds = Math.max(0, Math.min(c.in_seconds + d, c.out_seconds - 0.3));
+    else c.out_seconds = Math.max(c.in_seconds + 0.3, c.out_seconds + d);
+    recompute(); drawTimeline(); drawInspector(); save();
+  });
+  $('#isnap').onclick = () => snapClip(c);
   $$('input[name=ifit]').forEach((r) => r.onchange = () => { c.fit = r.value === 'auto' ? null : r.value; save(); });
   $('#ifocus').oninput = (e) => { c.focus_x = +e.target.value / 100; save(); };
-  $('#imute').onchange = (e) => { c.mute = e.target.checked; drawTrack(); save(); };
+  $('#imute').onchange = (e) => { c.mute = e.target.checked; drawTimeline(); save(); };
   $('#itrack').onchange = async (e) => {
-    if (!e.target.checked) { c.track = []; drawTrack(); save(); return; }
-    e.target.disabled = true; toast('Following the speaker across this clip…');
+    if (!e.target.checked) { c.track = []; drawTimeline(); save(); return; }
+    e.target.disabled = true;
     try {
       const d = await post(`/jobs/${c.job_id}/track?cut_in=${c.in_seconds}&cut_out=${c.out_seconds}`);
       c.track = d.keys || [];
-      toast(c.track.length ? `Tracked ${c.track.length} keyframes` : 'The speaker barely moves — a steady frame is better here');
-      drawTrack(); drawInspector(); save(true);
+      toast(c.track.length ? `Following the speaker · ${c.track.length} keys` : 'The speaker barely moves — a steady frame is better');
+      drawTimeline(); drawInspector(); save(true);
     } catch (err) { toast(err.message, true); e.target.checked = false; e.target.disabled = false; }
   };
 }
 
-// ---------------------------------------------------------------- clips in and out
-async function aiCuts() {
-  if (!JOB) return;
-  const b = $('#aicuts'); b.disabled = true; b.innerHTML = '<span class="spin"></span> proposing…';
-  try {
-    const cuts = await api('/jobs/' + JOB.id + '/cuts');
-    let added = 0;
-    for (const c of cuts.cuts || []) {
-      if (TL.clips.some((x) => x.job_id === JOB.id && Math.abs(x.in_seconds - c.in_seconds) < 0.5)) continue;
-      TL = await post(`/timelines/${TL.id}/clips`, { job_id: JOB.id, in_seconds: c.in_seconds, out_seconds: c.out_seconds, label: c.title.slice(0, 60) });
-      added++;
-    }
-    drawTrack(); drawInspector();
-    toast(added ? `${added} proposed cut${added === 1 ? '' : 's'} added` : 'Those cuts are already on the timeline');
-  } catch (e) { toast(e.message, true); }
-  b.disabled = false; b.innerHTML = `${icon('spark', 's')}AI cuts`;
-}
-
-function addClipDialog() {
-  const usable = JOBS.filter((j) => j.source.path);
-  const dlg = openDialog(`<div class="dhd"><h3>Add a clip</h3><p>Any analysed video on this machine. Pick the moment, or let the sentences decide it.</p></div>
-    <div class="dbd"><div class="field"><label>Video</label><select id="acjob">${usable.map((j) => `<option value="${attr(j.id)}" ${JOB && j.id === JOB.id ? 'selected' : ''}>${esc(j.source.name)}</option>`).join('')}</select></div>
-      <div id="acsent" class="acsent"><div class="loading"><span class="spin"></span></div></div>
-      <div class="row gap16"><div class="field grow"><label>From (s)</label><input type="number" id="acin" step="0.1" min="0" value="0"></div>
-        <div class="field grow"><label>To (s)</label><input type="number" id="acout" step="0.1" min="0" value="8"></div></div>
-      <div class="msg" id="acmsg"></div></div>
-    <div class="dft"><button class="btn" data-close>Cancel</button><button class="btn filled" id="acgo">${icon('add')}Add to the timeline</button></div>`, {
-    onOpen(d) {
-      const sel = d.querySelector('#acjob');
-      const loadSentences = async () => {
-        const box = d.querySelector('#acsent');
-        box.innerHTML = '<div class="loading"><span class="spin"></span></div>';
-        let tr; try { tr = await api(`/jobs/${sel.value}/transcript`); } catch { tr = null; }
-        if (!tr || !tr.ready) { box.innerHTML = '<div class="muted body-s">No measured sentences for this video — set the seconds by hand.</div>'; return; }
-        box.innerHTML = `<div class="overline">Sentences — click one, shift-click a second to take the span</div><div class="sentlist">${tr.sentences.map((s) => `<button class="sentbtn" data-a="${s.start}" data-b="${s.end}">${ts(s.start)} <span>${esc(s.text.slice(0, 80))}</span></button>`).join('')}</div>`;
-        box.querySelectorAll('.sentbtn').forEach((btn) => btn.onclick = (e) => {
-          if (e.shiftKey) d.querySelector('#acout').value = btn.dataset.b;
-          else { d.querySelector('#acin').value = btn.dataset.a; d.querySelector('#acout').value = btn.dataset.b; }
-        });
-      };
-      sel.onchange = loadSentences; loadSentences();
-      d.querySelector('#acgo').onclick = async () => {
-        const body = { job_id: sel.value, in_seconds: +d.querySelector('#acin').value, out_seconds: +d.querySelector('#acout').value };
-        const m = d.querySelector('#acmsg');
-        if (body.out_seconds <= body.in_seconds) { m.textContent = 'The end has to be after the start.'; m.className = 'msg err'; return; }
-        try { TL = await post(`/timelines/${TL.id}/clips`, body); d.close(); drawTrack(); drawInspector(); toast('Clip added'); }
-        catch (e) { m.textContent = e.message; m.className = 'msg err'; }
-      };
-    },
-  });
-  return dlg;
-}
-
-async function removeSelected() {
-  const c = clip(SEL); if (!c) return;
-  if (!(await confirmDialog({ title: 'Remove this clip from the edit?', body: 'The video itself is untouched.', ok: 'Remove', danger: true }))) return;
-  TL.clips = TL.clips.filter((x) => x.id !== c.id); SEL = null; recompute(); drawTrack(); drawInspector(); save(true);
-}
-function duplicateSelected() {
-  const c = clip(SEL); if (!c) return;
-  const copy = { ...c, id: undefined, label: (c.label || 'clip') + ' (copy)' };
-  delete copy.id;
-  TL.clips.splice(TL.clips.indexOf(c) + 1, 0, copy); recompute(); drawTrack(); save(true);
-}
-
-// ---------------------------------------------------------------- preview: play the edit, clip after clip
-function stopPreview() { if (PREVIEW) { clearInterval(PREVIEW); PREVIEW = null; } const v = $('#epv'); if (v) v.pause(); const b = $('#eplay'); if (b) b.innerHTML = `${icon('play', 's')}Play the edit`; }
-function playRange(c) {
-  const v = $('#epv'); if (!v || !c.job_id) return;
-  stopPreview();
-  if (!v.src.includes(c.job_id)) v.src = `/api/v1/jobs/${c.job_id}/media`;
-  v.currentTime = c.in_seconds; v.play();
-  PREVIEW = setInterval(() => { if (v.currentTime >= c.out_seconds) stopPreview(); }, 80);
-}
-function togglePreview() {
-  if (PREVIEW) return stopPreview();
-  const v = $('#epv'); if (!v || !TL.clips.length) return;
-  let i = 0;
-  const start = (n) => {
-    const c = TL.clips[n]; if (!c) return stopPreview();
-    $('#epclip').textContent = `clip ${n + 1}/${TL.clips.length} · ${esc(c.label || '')}`;
-    if (!v.src.includes(c.job_id)) { v.src = `/api/v1/jobs/${c.job_id}/media`; v.load(); }
-    const go = () => { v.currentTime = c.in_seconds; v.play().catch(() => {}); };
-    if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
+// ---------------------------------------------------------------- saving + rendering
+function save(now) {
+  clearTimeout(SAVE_T); dirty = true; mark();
+  const go = async () => {
+    try {
+      TL = await put('/timelines/' + TL.id, { title: TL.title, preset: TL.preset, template: TL.template, fit: TL.fit, audio: TL.audio,
+                                              clips: TL.clips.map(({ at, tracked, seconds, ...rest }) => rest) });
+      dirty = false; mark();
+    } catch (e) { toast(e.message, true); }
   };
-  start(0);
-  $('#eplay').innerHTML = `${icon('pause', 's')}Stop`;
-  PREVIEW = setInterval(() => {
-    const c = TL.clips[i]; if (!c) return stopPreview();
-    const done = TL.clips.slice(0, i).reduce((a, x) => a + x.seconds, 0);
-    const pos = Math.max(0, Math.min(c.seconds, v.currentTime - c.in_seconds));
-    $('#epos').textContent = `${fmt(done + pos)} / ${fmt(total())}`;
-    const php = $('#php'); if (php) { php.hidden = false; php.style.left = (100 * (done + pos) / (total() || 1)) + '%'; }
-    if (v.currentTime >= c.out_seconds - 0.03) { i++; if (i >= TL.clips.length) return stopPreview(); start(i); }
-  }, 60);
+  return now ? go() : (SAVE_T = setTimeout(go, 700));
 }
+function mark() { const m = $('#saved'); if (m) { m.textContent = dirty ? 'saving…' : 'saved'; m.className = 'tag ' + (dirty ? '' : 'ok'); } }
 
-// ---------------------------------------------------------------- render
 async function renderNow() {
-  const b = $('#tlrender'); b.disabled = true;
-  try { const r = await post(`/timelines/${TL.id}/render`, { preset: TL.preset }); toast(`Rendering ${r.clips} clips · ${Math.round(r.seconds)}s`); pollRenders(true); }
+  const b = $('#render'); b.disabled = true;
+  try { await save(true); const r = await post(`/timelines/${TL.id}/render`, { preset: TL.preset }); toast(`Rendering ${r.clips} clips · ${Math.round(r.seconds)}s`); pollRenders(); }
   catch (e) { toast(e.message, true); }
   b.disabled = false;
 }
-async function pollRenders(force) {
+
+async function pollRenders() {
   clearTimeout(POLL);
-  if (!TL) return;
+  if (!TL || !host) return;
   let list = [];
   try { list = (await api('/renders?job_id=' + encodeURIComponent(TL.jobs[0] || ''))).filter((r) => (r.detail || {}).timeline_id === TL.id); } catch { /* ignore */ }
-  RENDERS = list;
-  const el = $('#tlrenders');
+  const el = $('#renders');
   if (el) {
-    el.innerHTML = list.length ? `<div class="overline" style="margin-top:18px">Renders of this edit</div>` + list.map((r) => {
-      const busy = r.status === 'QUEUED' || r.status === 'RENDERING';
-      const p = (r.detail || {}).progress;
-      return `<div class="evb"><div class="row"><span class="tag ${r.status === 'DONE' ? 'ok' : r.status === 'FAILED' ? 'err' : 'pending'}">${esc(r.status.toLowerCase())}${p ? ` · clip ${p.scene}/${p.of}` : ''}</span>
-        <b>${esc(r.preset)}</b><span class="muted body-s">${r.duration_seconds ? r.duration_seconds.toFixed(1) + 's' : ''}${r.size_bytes ? ' · ' + (r.size_bytes / 1e6).toFixed(1) + ' MB' : ''}</span><span class="sp"></span>
-        ${r.status === 'DONE' ? `<a class="btn xs tonal" href="/api/v1/renders/${esc(r.id)}/video?download=true">${icon('download', 's')}MP4</a>` : ''}</div>
+    el.innerHTML = list.length ? `<div class="overline" style="margin:14px 0 8px">Renders of this edit</div><div class="g3">` + list.slice(0, 6).map((r) => {
+      const busy = r.status === 'QUEUED' || r.status === 'RENDERING', p = (r.detail || {}).progress;
+      return `<div class="evb"><div class="row"><span class="tag ${r.status === 'DONE' ? 'ok' : r.status === 'FAILED' ? 'err' : 'pending'}">${esc(r.status.toLowerCase())}${p ? ` · ${p.scene}/${p.of}` : ''}</span>
+        <span class="muted body-s">${r.duration_seconds ? r.duration_seconds.toFixed(1) + 's' : ''}${r.size_bytes ? ' · ' + (r.size_bytes / 1e6).toFixed(1) + ' MB' : ''}</span><span class="sp"></span>
+        ${r.status === 'DONE' ? `<a class="btn xs tonal" href="/api/v1/renders/${esc(r.id)}/video?download=true">${icon('download', 's')}</a>` : ''}</div>
         ${busy ? '<div class="progress" style="margin-top:8px"></div>' : ''}
         ${r.error ? `<div class="banner err" style="margin-top:8px">${icon('warn')}<div class="mono">${esc(r.error)}</div></div>` : ''}
-        ${r.status === 'DONE' ? `<video controls preload="none" poster="/api/v1/renders/${esc(r.id)}/poster.jpg" src="/api/v1/renders/${esc(r.id)}/video" style="margin-top:10px;max-height:420px;border-radius:var(--r);background:#000"></video>` : ''}</div>`;
-    }).join('') : '';
+        ${r.status === 'DONE' ? `<video controls preload="none" poster="/api/v1/renders/${esc(r.id)}/poster.jpg" src="/api/v1/renders/${esc(r.id)}/video" style="margin-top:8px;width:100%;max-height:300px;border-radius:6px;background:#000"></video>` : ''}</div>`;
+    }).join('') + '</div>' : '';
   }
-  if (list.some((r) => r.status === 'QUEUED' || r.status === 'RENDERING')) POLL = setTimeout(() => pollRenders(), 2500);
+  if (list.some((r) => r.status === 'QUEUED' || r.status === 'RENDERING')) POLL = setTimeout(pollRenders, 2500);
 }
