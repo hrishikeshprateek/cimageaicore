@@ -44,6 +44,7 @@ clearly labelled `[MOCK]`) so the pipeline can be exercised offline.
 | `GET` | `/api/v1/script-options` | languages, styles, lengths (with word budgets), dictation + voiceover providers |
 | `POST` | `/api/v1/scripts/{id}/voiceover`, `…/{id}/video` | speak the script (ElevenLabs) · cut it together as a branded video |
 | `GET` | `/api/v1/tts/voices` | the voices on the ElevenLabs key, with the characters left |
+| `GET/POST` | `/api/v1/jobs/{id}/transcript` | measured word/sentence timings for precise cuts; POST re-measures |
 | `POST` | `/api/v1/drafts` | `{opportunity_id}` or `{brief}` (+ `job_id`, `depth`, `include_images`) → Blog Agent runs in the background (202) |
 | `PUT` | `/api/v1/drafts/{id}/images` | editor sets the hero / inline pictures (new version) |
 | `POST/GET` | `/api/v1/jobs/{id}/frames` · `/api/v1/images?job_id=&kind=` · `/api/v1/images/{id}` | frames from a video, image list, image file |
@@ -240,6 +241,29 @@ and the audit log (`publication.draft|published|failed`). Tested against a fake 
 | `GET/POST` | `/api/v1/publish/targets` · `PUT/DELETE /{id}` · `POST /{id}/test` | websites |
 | `POST` | `/api/v1/drafts/{id}/publish` `{target_ids?, mode?}` | publish / re-publish an approved draft (202) |
 | `GET` | `/api/v1/drafts/{id}/publications` · `/api/v1/publish/publications` | what went where |
+
+## Word-level transcripts (V1.2) - the timings cuts are made on
+
+Gemini's analysis gives meaning with timestamps good to a second or two, and sentence boundaries *inside* a segment were
+estimated by splitting the time in proportion to the characters - which is why a reel could clip a syllable. Local
+Whisper measures the timing instead.
+
+`POST /api/v1/jobs/{id}/transcript`, and automatically after every analysis (`TRANSCRIBE_ON_ANALYSIS=true`):
+`faster-whisper` (`large-v3-turbo`, int8) over ffmpeg-decoded 16 kHz mono gives every word a start and end, grouped into
+sentences (punctuation, then a pause >= 0.45 s, then the widest gap in an over-long run). Three things make it usable for
+cutting rather than just reading:
+
+* **The language comes from the analysis.** Left to guess, Whisper calls Hindi-with-English-words "English" and
+  *translates* it; passing the language the analysis already found keeps the Devanagari.
+* **Silences are measured on the waveform**, not taken from Whisper's word gaps - it reports fast speech as back-to-back
+  words. A 10 ms RMS envelope with a threshold that adapts to the room (or the music bed) gives the real quiet spans, and
+  `snap_in` / `snap_out` place a cut *inside* one: ~100 ms before the first word, ~160 ms after the last.
+* **Speakers are carried over** from the analysis transcript by time overlap, so every sentence knows who said it.
+
+Stored per job (`transcripts` table, JSON sidecar without Postgres), served by `GET /api/v1/jobs/{id}/transcript`
+(`?words=true` for the word array) with `ends_open` / `starts_with_filler` flags, so the cutter can refuse to end a clip
+on "लेकिन" or open it on "तो". A 40 s clip takes ~45 s on the dev Mac; the model downloads once (1.6 GB) to `data/models`.
+Measurement is queued, never inline, so a long video never holds up embeddings or drafts.
 
 ## Video Composer (V0.7)
 
