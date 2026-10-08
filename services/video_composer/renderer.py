@@ -55,6 +55,7 @@ class RenderSpec(BaseModel):
     audio_bitrate: str = "160k"
     audio_fade: float = 0.15
     force_audio_track: bool = False   # silent stereo track when the source has none, so segments concat cleanly (storyboards)
+    track: list[dict] = Field(default_factory=list)   # [{t, x, y}] - the crop follows the speaker instead of sitting still
 
     @property
     def duration(self) -> float:
@@ -162,7 +163,15 @@ def build_command(spec: RenderSpec, template: Template, layout: ResolvedLayout, 
     v = layout.video_rect
     if layout.fit == "cover":
         cc = cover_crop(spec.source_width, spec.source_height, v, spec.focus_x, spec.focus_y)
-        vid_chain = f"scale={cc.scaled_w}:{cc.scaled_h}:flags=lanczos,crop={cc.w}:{cc.h}:{cc.x}:{cc.y}"
+        x, y = str(cc.x), str(cc.y)
+        if spec.track:
+            from services.video_composer.timeline import FocusKey
+            from services.video_composer.tracking import crop_expression
+
+            keys = [FocusKey(**k) if isinstance(k, dict) else k for k in spec.track]
+            x = crop_expression(keys, scaled=cc.scaled_w, crop=cc.w, axis="x", duration=dur)
+            y = crop_expression(keys, scaled=cc.scaled_h, crop=cc.h, axis="y", duration=dur)
+        vid_chain = f"scale={cc.scaled_w}:{cc.scaled_h}:flags=lanczos,crop={cc.w}:{cc.h}:{x}:{y}"
     else:
         vid_chain = f"scale={v.w}:{v.h}:flags=lanczos"
     graph = [

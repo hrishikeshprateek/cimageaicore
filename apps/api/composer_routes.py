@@ -416,6 +416,7 @@ class ComposeRequest(BaseModel):
     focus_y: float = Field(0.5, ge=0, le=1)
     title: str | None = None
     cut_id: str | None = None
+    track_faces: bool = False     # the crop follows the speaker instead of sitting on one focus point
 
 
 class ComposeResponse(BaseModel):
@@ -455,6 +456,15 @@ def compose(request: Request, ctx: Ctx, job_id: str, body: ComposeRequest) -> Co
         captions = cues_for_window(analysis.transcript, body.cut_in, cut_out, max_chars_per_line=lim.max_chars_per_line, max_lines=lim.max_lines,
                                    min_seconds=lim.caption_min_seconds) if analysis else []
     s = ctx.settings
+    track: list[dict] = []
+    if body.track_faces:
+        from services.video_composer.tracking import track_faces as _track
+
+        try:
+            track = [k.model_dump() for k in _track(src, body.cut_in, cut_out)]
+            log.info("compose %s: tracked %d keyframes across %.1fs", job.id, len(track), cut_out - body.cut_in)
+        except Exception as exc:  # noqa: BLE001 - tracking is an improvement, never a reason to refuse the render
+            log.warning("face tracking failed for %s: %s", job.id, exc)
     renders: list[RenderRecord] = []
     for preset in dict.fromkeys(body.presets):
         if preset not in template.layouts:
@@ -465,6 +475,7 @@ def compose(request: Request, ctx: Ctx, job_id: str, body: ComposeRequest) -> Co
             focus_x=body.focus_x, focus_y=body.focus_y,
             captions=captions or [], captions_enabled=body.captions_enabled, lower_third=body.lower_third, title=body.title,
             caption_engine=s.caption_engine, fps=s.fps, crf=s.crf, x264_preset=s.x264_preset, audio_bitrate=s.audio_bitrate,
+            track=track,
         )
         rec = RenderRecord(job_id=job.id, media_id=job.media_id, preset=preset, template=template.name, cut_in=spec.cut_in, cut_out=spec.cut_out,
                            title=body.title, cut_id=body.cut_id, spec=spec)
@@ -504,6 +515,49 @@ def render_poster(ctx: Ctx, render_id: str) -> FileResponse:
     if not poster or not Path(poster).exists():
         raise HTTPException(404, "no poster for this render")
     return FileResponse(Path(poster), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+
+def timeline_of(rec: RenderRecord) -> "Timeline":
+    """Every render - a single cut or a whole storyboard - described as an editable/exportable timeline."""
+    from services.video_composer.timeline import Clip, Timeline
+
+    d = rec.detail or {}
+    if d.get("kind") == "storyboard":
+        clips = []
+        for seg in d.get("segments") or []:
+            seconds = float(seg.get("seconds") or 0)
+            cut_in = float(seg.get("cut_in") or 0)
+            clips.append(Clip(kind=seg.get("kind", "clip"), job_id=rec.job_id, source_path=seg.get("source_path"),
+                              in_seconds=cut_in, out_seconds=cut_in + seconds, text=seg.get("text"),
+                              label=f"scene {seg.get('n')}", note=seg.get("note") or ""))
+        return Timeline(id=rec.id, title=rec.title or "script", preset=rec.preset, template=rec.template,
+                        audio=d.get("audio", "voiceover"), clips=clips, source={"kind": "script", "id": d.get("script_id")})
+    spec = rec.spec
+    clip = Clip(job_id=rec.job_id, source_path=spec.source_path, in_seconds=spec.cut_in, out_seconds=spec.cut_out,
+                source_width=spec.source_width, source_height=spec.source_height, focus_x=spec.focus_x, focus_y=spec.focus_y,
+                track=[k if isinstance(k, dict) else k.model_dump() for k in (spec.track or [])],
+                captions=list(spec.captions or []), lower_third=spec.lower_third, label=rec.title or rec.cut_id or "cut")
+    return Timeline(id=rec.id, title=rec.title or "cut", preset=rec.preset, template=rec.template, fit=spec.fit,
+                    audio="source", clips=[clip], source={"kind": "cut", "id": rec.cut_id, "job_id": rec.job_id})
+
+
+@router.get("/api/v1/renders/{render_id}/timeline")
+def render_timeline(ctx: Ctx, render_id: str) -> dict:
+    """The edit behind a render: the clips, where they sit, and what was tracked. This is what the studio edits."""
+    return timeline_of(get_render(ctx, render_id)).describe()
+
+
+@router.get("/api/v1/renders/{render_id}/export")
+def export_render(ctx: Ctx, render_id: str, format: Literal["fcpxml", "edl", "srt", "json"] = "fcpxml") -> Response:
+    """Hand the edit to another editor: FCPXML (Resolve / Final Cut), EDL (Premiere, Avid, anything), SRT, or our JSON.
+    Every clip points at the original file at its original timecode - nothing is re-encoded for the hand-off."""
+    from services.video_composer.exporters import EXPORTERS
+
+    rec = get_render(ctx, render_id)
+    fn, media_type, ext = EXPORTERS[format]
+    body = fn(timeline_of(rec))
+    name = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in (rec.title or "cimage-cut")).strip("-")[:50] or "cimage-cut"
+    return Response(body, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{name}-{rec.id}.{ext}"'})
 
 
 @router.get("/api/v1/renders/{render_id}/captions.srt")

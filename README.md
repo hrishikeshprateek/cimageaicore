@@ -45,6 +45,7 @@ clearly labelled `[MOCK]`) so the pipeline can be exercised offline.
 | `POST` | `/api/v1/scripts/{id}/voiceover`, `…/{id}/video` | speak the script (ElevenLabs) · cut it together as a branded video |
 | `GET` | `/api/v1/tts/voices` | the voices on the ElevenLabs key, with the characters left |
 | `GET/POST` | `/api/v1/jobs/{id}/transcript` | measured word/sentence timings for precise cuts; POST re-measures |
+| `GET` | `/api/v1/renders/{id}/timeline`, `…/export?format=` | the edit as data; FCPXML / EDL / SRT / JSON for another editor |
 | `POST` | `/api/v1/drafts` | `{opportunity_id}` or `{brief}` (+ `job_id`, `depth`, `include_images`) → Blog Agent runs in the background (202) |
 | `PUT` | `/api/v1/drafts/{id}/images` | editor sets the hero / inline pictures (new version) |
 | `POST/GET` | `/api/v1/jobs/{id}/frames` · `/api/v1/images?job_id=&kind=` · `/api/v1/images/{id}` | frames from a video, image list, image file |
@@ -264,6 +265,34 @@ Stored per job (`transcripts` table, JSON sidecar without Postgres), served by `
 (`?words=true` for the word array) with `ends_open` / `starts_with_filler` flags, so the cutter can refuse to end a clip
 on "लेकिन" or open it on "तो". A 40 s clip takes ~45 s on the dev Mac; the model downloads once (1.6 GB) to `data/models`.
 Measurement is queued, never inline, so a long video never holds up embeddings or drafts.
+
+## Editing studio: tracked framing, the timeline, and getting out (V1.3)
+
+**The crop follows the speaker.** `locate_subject()` answers "where are the faces on average" and gives one focus point
+for a whole cut; `services/video_composer/tracking.py` answers "where is the speaker *now*". It samples every 0.5 s,
+picks the dominant face (the biggest, unless a smaller one is clearly the one already being followed), then - because a
+crop that chases every detection looks worse than a static one - smooths the path exponentially, ignores movement under
+3.5% of the frame, caps the speed at a quarter-frame per second and reduces it to the fewest keyframes that still
+describe it (Douglas-Peucker). If the speaker never really moves, it returns nothing and the static focus is used. The
+renderer turns the keys into a piecewise-linear `crop=w:h:x(t):y(t)` expression, clamped to the frame.
+`POST /api/v1/jobs/{id}/compose {"track_faces": true}`. Measured: 20 s of a multi-person talk tracked in 1.5 s.
+
+**The edit is data** - `services/video_composer/timeline.py`. A `Timeline` is an ordered list of `Clip`s, each with its
+source window, framing (static focus or a tracked path), captions, on-screen text, lower third and audio. Whatever makes
+it - a cut proposal, a script's scenes, the AI's own choices - produces one of these, and a person moving a handle
+changes the same object. `GET /api/v1/renders/{id}/timeline` returns it with every clip's position.
+
+**It can leave.** `GET /api/v1/renders/{id}/export?format=fcpxml|edl|srt|json`:
+
+| Format | Opens in | Carries |
+|---|---|---|
+| `fcpxml` (1.10) | DaVinci Resolve, Final Cut | assets as `file://` paths, frame-accurate offsets, on-screen text, tracking notes |
+| `edl` (CMX3600) | Premiere, Avid, Resolve, anything | source and record timecode per event, file name per clip to relink |
+| `srt` | any player / YouTube | the captions, timed against the finished cut |
+| `json` | us, and any script | the timeline exactly as we hold it |
+
+Nothing is re-encoded for the hand-off: every clip points at the original file at its original timecode, so the finishing
+work happens on the masters.
 
 ## Video Composer (V0.7)
 
