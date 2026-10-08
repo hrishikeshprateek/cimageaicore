@@ -268,6 +268,15 @@ Measurement is queued, never inline, so a long video never holds up embeddings o
 
 ## Editing studio: tracked framing, the timeline, and getting out (V1.3)
 
+In the studio (`/admin#composer`) the measured transcript is drawn as a **speech lane** under the trim bar: one block per
+sentence, positioned on the timeline. Click a sentence to cut exactly that, shift-click to extend to it, and with
+**snap to speech** on (default) every handle you drag lands on a sentence boundary inside the measured silence
+(`GET /api/v1/jobs/{id}/snap`). A **"what this cut says"** panel shows the words the clip will contain and warns when it
+ends mid-thought. **Follow the speaker** turns on face tracking for the render, and a finished render offers
+**timeline → FCPXML / EDL / SRT / JSON**. The side menu collapses to an icon rail with the button in the top bar or `[`,
+and the choice is remembered.
+
+
 **The crop follows the speaker.** `locate_subject()` answers "where are the faces on average" and gives one focus point
 for a whole cut; `services/video_composer/tracking.py` answers "where is the speaker *now*". It samples every 0.5 s,
 picks the dominant face (the biggest, unless a smaller one is clearly the one already being followed), then - because a

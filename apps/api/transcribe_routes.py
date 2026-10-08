@@ -104,6 +104,23 @@ def get_transcript(request: Request, job_id: str, words: bool = False) -> dict[s
     }
 
 
+@router.get("/jobs/{job_id}/snap")
+def snap_window(request: Request, job_id: str, cut_in: float, cut_out: float) -> dict[str, Any]:
+    """Move a window onto the nearest sentence boundaries, placed inside the measured silence. This is what the studio
+    calls while you drag a handle, so the edit a person makes is as clean as the one the AI proposes."""
+    t = _store(request).get(job_id)
+    if t is None:
+        return {"cut_in": round(cut_in, 3), "cut_out": round(cut_out, 3), "snapped": False}
+    a, b = t.snap_in(cut_in), t.snap_out(cut_out)
+    if b <= a:
+        b = min(t.seconds or cut_out, a + max(0.5, cut_out - cut_in))
+    inside, heard = t.inside(a, b), t.between(a, b)      # fully contained, and everything the viewer will hear of
+    return {"cut_in": a, "cut_out": b, "snapped": True, "sentences": [s.i for s in inside],
+            "text": " ".join(s.text for s in heard),
+            "partial": [s.i for s in heard if s not in inside],
+            "ends_open": bool(heard and heard[-1].ends_open()), "starts_with_filler": bool(heard and heard[0].starts_with_filler())}
+
+
 @router.post("/jobs/{job_id}/transcript", status_code=status.HTTP_202_ACCEPTED)
 def run_transcript(request: Request, job_id: str, force: bool = True) -> dict[str, Any]:
     """Measure (or re-measure) this video's word timings."""

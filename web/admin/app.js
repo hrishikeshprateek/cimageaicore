@@ -78,13 +78,28 @@ async function route(force = false) {
   document.getElementById('view').scrollTop = 0;
 }
 
+const RAIL_KEY = 'cimage.nav.rail';
+function setRail(on, remember = true) {
+  document.documentElement.classList.toggle('rail', on);
+  const b = document.getElementById('railtoggle');
+  if (b) { b.title = (on ? 'Expand the menu' : 'Collapse the menu') + ' (press [)'; b.classList.toggle('on', on); }
+  if (remember) { try { localStorage.setItem(RAIL_KEY, on ? '1' : '0'); } catch { /* private window */ } }
+}
+
 function boot() {
   renderNav();
+  try { setRail(localStorage.getItem(RAIL_KEY) === '1', false); } catch { /* ignore */ }
+  const rt = document.getElementById('railtoggle');
+  if (rt) rt.onclick = () => setRail(!document.documentElement.classList.contains('rail'));
   window.addEventListener('hashchange', () => route(false));
   document.getElementById('refresh').onclick = () => { loadOverview(); route(true); };
   const sb = document.getElementById('q');
   sb.addEventListener('keydown', (e) => { if (e.key === 'Enter' && sb.value.trim()) { go('search?q=' + encodeURIComponent(sb.value.trim())); sb.blur(); } });
-  document.addEventListener('keydown', (e) => { if (e.key === '/' && !e.target.matches('input,textarea,select,[contenteditable]')) { e.preventDefault(); sb.focus(); } });
+  document.addEventListener('keydown', (e) => {
+    if (e.target && e.target.matches && e.target.matches('input,textarea,select,[contenteditable]')) return;   // the event can be aimed at the document itself
+    if (e.key === '/') { e.preventDefault(); sb.focus(); }
+    if (e.key === '[') { e.preventDefault(); setRail(!document.documentElement.classList.contains('rail')); }
+  });
   loadOverview().then(() => route(true));
   ovT = setInterval(() => { if (!document.hidden) loadOverview(); }, 6000);
   pollT = setInterval(() => { if (!document.hidden && current && current.tick) { try { current.tick(ctx); } catch { /* ignore */ } } }, 5000);

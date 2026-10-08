@@ -6,6 +6,7 @@ export const subtitle = 'analysed video → proposed cut → branded short';
 let root, ctx, SYSTEM = null, JOBS = [], JOBSIG = '', SEL = null, JOB = null, CUTS = null, CUT = null, DUR = 0, TPL = 'placeholder', RENDERS = [];
 const ED_FRAMING = () => ({ fit: 'auto', focus_x: 0.5, focus_y: 0.5 });
 let ED = blankEd(), FR = null, FOCUS_MANUAL = false, FR_REQ = 0, FR_TIMER = null, FR_IMG_KEY = '', LOOP = false, keyHandler = null;
+let TR = null, SNAP = true, TRACK = false, SNAP_TIMER = null;   // the measured transcript, and whether edges snap to its sentences
 function blankEd() { return { cut_in: 0, cut_out: 0, captions: [], captions_enabled: true, lower_third: { name: '', role: '' }, title: '', cut_id: null, ...ED_FRAMING() }; }
 const $ = (s) => root && root.querySelector(s);
 const $$ = (s) => root ? [...root.querySelectorAll(s)] : [];
@@ -58,6 +59,7 @@ async function select(id) {
   try { CUTS = await api('/jobs/' + id + '/cuts'); DUR = CUTS.duration_seconds || JOB.source.duration_seconds || 0; } catch (e) { $('#cuts').innerHTML = `<div class="banner err">${icon('warn')}<div>${esc(e.message)}</div></div>`; return; }
   if (CUTS.cuts.length) loadCut(CUTS.cuts[0]); else ED = { ...blankEd(), cut_out: Math.min(30, DUR || 30) };
   renderCuts(); syncTrim(); syncFields(); renderCues(); scheduleFraming(true, 0); await refreshRenders(true);
+  loadTranscript();
 }
 function loadCut(c) { CUT = c.id; ED = { cut_in: c.in_seconds, cut_out: c.out_seconds, captions: c.captions.map((x) => ({ ...x })), captions_enabled: true, lower_third: { name: c.lower_third?.name || '', role: c.lower_third?.role || '' }, title: c.title, cut_id: c.id, ...ED_FRAMING() }; FOCUS_MANUAL = false; }
 
@@ -68,8 +70,11 @@ function mountEditor() {
   <div class="row between"><h3 class="title-m ellipsis" style="max-width:70%" title="${attr(j.source.name)}">${esc(j.source.name)}</h3><span class="tag mono">${ts(j.source.duration_seconds || 0)}</span></div>
   <div class="player" style="margin-top:12px"><video id="src" src="/api/v1/jobs/${esc(j.id)}/media" controls preload="metadata" playsinline></video></div>
   <div class="trim" id="trim"><div class="win" id="win"></div><div class="h" id="hin" title="drag: IN"></div><div class="h" id="hout" title="drag: OUT"></div><div class="ph" id="ph"></div><span class="tick" style="left:0">0:00</span><span class="tick" id="tickend" style="left:100%"></span></div>
+  <div class="speech" id="speech"></div>
+  <div class="saysbox" id="says" hidden></div>
   <div class="row" style="margin-top:22px"><span class="tc">IN <b id="tin">0:00.0</b> &nbsp;→&nbsp; OUT <b id="tout">0:00.0</b> &nbsp;=&nbsp; <b id="tlen">0.0</b>s</span><span class="muted body-s">playhead <b class="mono" id="phv">0.0</b>s</span><span class="sp"></span>
-    <button class="btn sm tonal" id="setin" title="key: I">⟵ IN here</button><button class="btn sm tonal" id="setout" title="key: O">OUT here ⟶</button><button class="btn sm outlined" id="loop" title="key: L">${icon('play', 's')}loop the cut</button></div>
+    <button class="btn sm tonal" id="setin" title="key: I">⟵ IN here</button><button class="btn sm tonal" id="setout" title="key: O">OUT here ⟶</button><button class="btn sm outlined" id="loop" title="key: L">${icon('play', 's')}loop the cut</button>
+    <label class="check" id="snapbox" title="move every edge onto a sentence boundary, inside the silence"><input type="checkbox" id="snap" checked> snap to speech</label></div>
   <div class="muted body-s" style="margin-top:6px">Drag the handles or press <kbd>I</kbd> / <kbd>O</kbd> at the playhead · <kbd>space</kbd> play/pause · <kbd>L</kbd> loop · <kbd>←</kbd>/<kbd>→</kbd> step 0.2 s</div>
   <div id="cutwarn"></div>
   <div class="g2 even" style="margin-top:14px">
@@ -85,6 +90,7 @@ function mountEditor() {
   <div class="framing" style="margin-top:8px"><div class="frprev" id="frprev"><img id="frimg" alt="frame at IN"><div class="crop" id="frcrop" hidden></div></div>
     <div><div class="seg" id="fitseg"><label title="fill the clip window for wide sources; letterbox only when cropping would lose too much"><input type="radio" name="fit" value="auto" checked>Auto</label><label title="scale to fill the window and crop the overflow"><input type="radio" name="fit" value="cover">Fill</label><label title="show the whole frame, brand colour around it"><input type="radio" name="fit" value="contain">Fit</label></div>
       <div class="row" style="margin-top:12px"><span class="muted body-s" id="frax">focus</span><input type="range" id="focus" min="0" max="100" value="50" style="flex:1"><button class="btn xs tonal" id="refocus" title="re-run face detection on this cut">${icon('people', 's')}faces</button></div>
+      <label class="check" id="trackbox" style="margin-top:10px" title="the crop follows the speaker across the cut instead of sitting on one point"><input type="checkbox" id="track"> follow the speaker <span class="muted body-s">(tracked pan, slower render)</span></label>
       <div class="muted body-s" id="frnote" style="margin-top:8px"></div></div></div>
   <div class="row between" style="margin-top:20px"><label class="check"><input type="checkbox" id="capon" checked> Burn captions <span class="tag" id="cuecount"></span></label><div class="row"><button class="btn xs tonal" id="regen" title="regenerate the cues for the current IN/OUT from the transcript">${icon('refresh', 's')}from transcript</button><button class="btn xs" id="addcue">${icon('add', 's')}cue</button></div></div>
   <div class="muted body-s" style="margin:6px 0 8px">Times are seconds from the cut's IN point. Hindi/English both fine; cues outside the cut are greyed.</div>
@@ -101,6 +107,8 @@ function bindEditor() {
   $$('[data-n]').forEach((b) => b.onclick = () => { const d = +b.dataset.d; if (b.dataset.n === 'in') { setIn(ED.cut_in + d); v.currentTime = ED.cut_in; } else { setOut(ED.cut_out + d); v.currentTime = Math.max(0, ED.cut_out - 1.5); } });
   $('#ltname').oninput = (e) => ED.lower_third.name = e.target.value; $('#ltrole').oninput = (e) => ED.lower_third.role = e.target.value; $('#title').oninput = (e) => ED.title = e.target.value;
   $('#capon').onchange = (e) => { ED.captions_enabled = e.target.checked; syncRenderButton(); };
+  $('#snap').onchange = (e) => { SNAP = e.target.checked; if (SNAP) snapNow(false); else saysBox(); };
+  $('#track').onchange = (e) => { TRACK = e.target.checked; syncRenderButton(); };
   $$('input[name=fit]').forEach((r) => r.onchange = () => { ED.fit = r.value; scheduleFraming(!FOCUS_MANUAL, 0); });
   $('#focus').oninput = (e) => { FOCUS_MANUAL = true; const val = +e.target.value / 100; if (cropAxis() === 'y') ED.focus_y = val; else ED.focus_x = val; drawCrop(); };
   $('#refocus').onclick = () => { FOCUS_MANUAL = false; scheduleFraming(true, 0); };
@@ -111,20 +119,87 @@ function bindEditor() {
   const pos = (e) => { const r = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (DUR || v.duration || 0); };
   bar.addEventListener('pointerdown', (e) => { if (e.target.id === 'hin' || e.target.id === 'hout') { drag = e.target.id; bar.setPointerCapture(e.pointerId); } else v.currentTime = pos(e); });
   bar.addEventListener('pointermove', (e) => { if (!drag) return; const t = pos(e); if (drag === 'hin') setIn(Math.min(t, ED.cut_out - 0.5)); else setOut(Math.max(t, ED.cut_in + 0.5)); v.currentTime = drag === 'hin' ? ED.cut_in : Math.max(0, ED.cut_out - 0.1); });
-  bar.addEventListener('pointerup', () => { drag = null; }); bar.addEventListener('pointercancel', () => { drag = null; });
+  bar.addEventListener('pointerup', () => { if (drag) scheduleSnap(); drag = null; }); bar.addEventListener('pointercancel', () => { drag = null; });
 }
 function toggleLoop() { const v = $('#src'); LOOP = !LOOP; if (LOOP) { v.currentTime = ED.cut_in; v.play(); $('#loop').innerHTML = `${icon('pause', 's')}stop loop`; } else { v.pause(); $('#loop').innerHTML = `${icon('play', 's')}loop the cut`; } }
-function setIn(t) { ED.cut_in = r1(Math.max(0, Math.min(t, DUR ? DUR - 0.5 : t))); if (ED.cut_out <= ED.cut_in) ED.cut_out = r1(ED.cut_in + 1); syncTrim(); syncFields(); scheduleFraming(!FOCUS_MANUAL); }
-function setOut(t) { ED.cut_out = r1(Math.max(0.5, DUR ? Math.min(t, DUR) : t)); if (ED.cut_in >= ED.cut_out) ED.cut_in = r1(Math.max(0, ED.cut_out - 1)); syncTrim(); syncFields(); scheduleFraming(!FOCUS_MANUAL); }
+function setIn(t) { ED.cut_in = r1(Math.max(0, Math.min(t, DUR ? DUR - 0.5 : t))); if (ED.cut_out <= ED.cut_in) ED.cut_out = r1(ED.cut_in + 1); syncTrim(); syncFields(); scheduleFraming(!FOCUS_MANUAL); scheduleSnap(); }
+function setOut(t) { ED.cut_out = r1(Math.max(0.5, DUR ? Math.min(t, DUR) : t)); if (ED.cut_in >= ED.cut_out) ED.cut_in = r1(Math.max(0, ED.cut_out - 1)); syncTrim(); syncFields(); scheduleFraming(!FOCUS_MANUAL); scheduleSnap(); }
 function syncTrim() {
   if (!$('#win')) return; const d = DUR || 1;
   $('#win').style.left = (100 * ED.cut_in / d) + '%'; $('#win').style.width = (100 * (ED.cut_out - ED.cut_in) / d) + '%'; $('#hin').style.left = (100 * ED.cut_in / d) + '%'; $('#hout').style.left = (100 * ED.cut_out / d) + '%'; $('#tickend').textContent = ts(DUR);
   $('#tin').textContent = ts(ED.cut_in); $('#tout').textContent = ts(ED.cut_out); $('#tlen').textContent = (ED.cut_out - ED.cut_in).toFixed(1);
   const len = ED.cut_out - ED.cut_in, lim = SYSTEM.cuts || {}; $('#cutwarn').innerHTML = len > lim.max ? `<div class="banner warn" style="margin-top:10px">${icon('info')}<div>This cut is ${len.toFixed(0)}s — longer than the ${lim.max}s target for shorts. It will still render.</div></div>` : '';
   $$('#cues .cue').forEach((r) => r.classList.toggle('dim', +r.querySelector('[data-k=start]').value >= len)); syncRenderButton();
+  $$('#lane .sent').forEach((n) => { const x = TR && TR.sentences && TR.sentences.find((y) => y.i === +n.dataset.i); if (x) n.classList.toggle('on', x.start >= ED.cut_in - 0.05 && x.end <= ED.cut_out + 0.05); });
 }
 function syncFields() { $('#cin').value = ED.cut_in; $('#cout').value = ED.cut_out; $('#ltname').value = ED.lower_third.name || ''; $('#ltrole').value = ED.lower_third.role || ''; $('#title').value = ED.title || ''; $('#capon').checked = ED.captions_enabled; }
-function syncRenderButton() { const b = $('#render'); if (!b) return; const n = selectedPresets().length; b.textContent = `Render ${n} preset${n === 1 ? '' : 's'} · ${(ED.cut_out - ED.cut_in).toFixed(1)}s · template “${TPL}”${ED.captions_enabled ? '' : ' · no captions'}`; b.disabled = !n; }
+function syncRenderButton() { const b = $('#render'); if (!b) return; const n = selectedPresets().length; b.textContent = `Render ${n} preset${n === 1 ? '' : 's'} · ${(ED.cut_out - ED.cut_in).toFixed(1)}s · template “${TPL}”${ED.captions_enabled ? '' : ' · no captions'}${TRACK ? ' · tracked' : ''}`; b.disabled = !n; }
+
+// ---------------------------------------------------------------- the speech lane: cut by sentence, not by guesswork
+async function loadTranscript() {
+  TR = null; drawSpeech();
+  if (!SEL) return;
+  let d;
+  try { d = await api(`/jobs/${SEL}/transcript`); } catch { return; }
+  if (!root || !SEL) return;
+  if (!d.ready) {
+    TR = { pending: d.status === 'running', error: d.error };
+    drawSpeech();
+    if (d.status === 'running') setTimeout(() => { if (SEL) loadTranscript(); }, 4000);
+    return;
+  }
+  TR = d; drawSpeech(); saysBox();
+}
+
+function drawSpeech() {
+  const el = $('#speech'); if (!el) return;
+  if (!TR || !TR.sentences) {
+    const pending = TR && TR.pending;
+    el.innerHTML = `<div class="nospeech">${pending ? '<span class="spin"></span> measuring every word of this video…'
+      : TR && TR.error ? `<span class="muted body-s">word timings failed: ${esc(TR.error)}</span>`
+      : '<span class="muted body-s">No measured word timings for this video yet — cuts will use the analysis estimate.</span>'}
+      ${pending ? '' : `<span class="sp"></span><button class="btn xs tonal" id="measure">${icon('spark', 's')}measure now</button>`}</div>`;
+    const m = $('#measure');
+    if (m) m.onclick = async () => { m.disabled = true; try { await post(`/jobs/${SEL}/transcript`); TR = { pending: true }; drawSpeech(); setTimeout(() => loadTranscript(), 3000); } catch (e) { toast(e.message, true); m.disabled = false; } };
+    return;
+  }
+  const d = DUR || TR.seconds || 1;
+  el.innerHTML = `<div class="lane" id="lane">${TR.sentences.map((x) => {
+    const on = x.start >= ED.cut_in - 0.05 && x.end <= ED.cut_out + 0.05;
+    return `<span class="sent ${on ? 'on' : ''}${x.ends_open ? ' open' : ''}" data-i="${x.i}" style="left:${100 * x.start / d}%;width:${Math.max(0.5, 100 * (x.end - x.start) / d)}%" title="${attr(ts(x.start) + ' → ' + ts(x.end) + (x.speaker ? '  ' + x.speaker : '') + '\n' + x.text)}"><i>${esc(x.text)}</i></span>`;
+  }).join('')}</div>
+  <div class="lanefoot"><span class="muted body-s">${TR.sentences.length} sentences measured — click one to cut exactly that, shift-click to extend</span><span class="sp"></span><span class="tag mono">${esc((TR.model || '').replace('whisper:', ''))}</span></div>`;
+  $$('#lane .sent').forEach((n) => n.onclick = (e) => {
+    const x = TR.sentences.find((y) => y.i === +n.dataset.i); if (!x) return;
+    if (e.shiftKey && x.end > ED.cut_in) setOut(x.end);
+    else { ED.cut_in = x.start; setOut(x.end); }
+    const v = $('#src'); if (v) v.currentTime = ED.cut_in;
+    snapNow(true);
+  });
+}
+
+function scheduleSnap() { if (!SNAP || !TR || !TR.sentences) { saysBox(); return; } clearTimeout(SNAP_TIMER); SNAP_TIMER = setTimeout(() => snapNow(false), 400); }
+
+async function snapNow(quiet) {
+  if (!SNAP || !SEL || !TR || !TR.sentences) { saysBox(); return; }
+  let d;
+  try { d = await api(`/jobs/${SEL}/snap?cut_in=${ED.cut_in}&cut_out=${ED.cut_out}`); } catch { return; }
+  if (!root || !d.snapped) return;
+  const moved = Math.abs(d.cut_in - ED.cut_in) > 0.01 || Math.abs(d.cut_out - ED.cut_out) > 0.01;
+  ED.cut_in = d.cut_in; ED.cut_out = d.cut_out;
+  syncTrim(); syncFields(); drawSpeech(); saysBox(d);
+  if (moved && !quiet) scheduleFraming(!FOCUS_MANUAL);
+}
+
+function saysBox(d) {
+  const box = $('#says'); if (!box) return;
+  const heard = (TR && TR.sentences || []).filter((x) => x.end > ED.cut_in + 0.05 && x.start < ED.cut_out - 0.05);
+  const text = (d && d.text) || heard.map((x) => x.text).join(' ');
+  if (!text) { box.hidden = true; return; }
+  const open = d ? d.ends_open : !!(heard.at(-1) && heard.at(-1).ends_open);
+  box.hidden = false;
+  box.innerHTML = `<div class="row"><span class="overline">What this cut says</span><span class="sp"></span><span class="muted body-s">${heard.length} sentence${heard.length === 1 ? '' : 's'}</span>${open ? '<span class="tag warn">ends mid-thought</span>' : '<span class="tag ok">complete</span>'}</div><p>${esc(text)}</p>`;
+}
 
 // ---------------------------------------------------------------- framing
 const framingPreset = () => { const p = selectedPresets(); return p.includes('reels') ? 'reels' : (p[0] || 'reels'); };
@@ -173,7 +248,7 @@ async function doRender() {
   const presets = selectedPresets(); if (!presets.length) return msg('Tick at least one preset.', 1); if (ED.cut_out <= ED.cut_in) return msg('OUT must be after IN.', 1);
   const caps = ED.captions.filter((c) => c.text.trim() && c.end > c.start).map((c) => ({ start: c.start, end: c.end, text: c.text.trim() }));
   $('#render').disabled = true; msg('Queueing…');
-  try { const body = { cut_in: ED.cut_in, cut_out: ED.cut_out, presets, template: TPL, captions: ED.captions_enabled ? caps : [], captions_enabled: ED.captions_enabled, lower_third: ED.lower_third.name.trim() ? { name: ED.lower_third.name.trim(), role: ED.lower_third.role.trim() || null } : null, title: ED.title.trim() || null, cut_id: ED.cut_id, fit: ED.fit, focus_x: ED.focus_x, focus_y: ED.focus_y };
+  try { const body = { cut_in: ED.cut_in, cut_out: ED.cut_out, presets, template: TPL, captions: ED.captions_enabled ? caps : [], captions_enabled: ED.captions_enabled, lower_third: ED.lower_third.name.trim() ? { name: ED.lower_third.name.trim(), role: ED.lower_third.role.trim() || null } : null, title: ED.title.trim() || null, cut_id: ED.cut_id, fit: ED.fit, focus_x: ED.focus_x, focus_y: ED.focus_y, track_faces: TRACK };
     const r = await post('/jobs/' + SEL + '/compose', body); msg('Queued ' + r.renders.length + ' render(s) — they appear on the right as they finish.', 'ok'); toast('Rendering ' + presets.join(' + ')); await refreshRenders(true); }
   catch (e) { msg(e.message, 1); } finally { const b = $('#render'); if (b) b.disabled = false; }
 }
@@ -187,7 +262,7 @@ function updateCard(d, r, force) {
     d.querySelector('.errbox').innerHTML = r.error ? `<div class="banner err" style="margin-top:8px">${icon('warn')}<div class="mono">${esc(r.error)}</div></div>` : '';
     const prev = d.querySelector('.prev');
     if (r.status === 'DONE' && !prev.dataset.ready) { prev.hidden = false; prev.dataset.ready = '1'; prev.classList.toggle('wide', r.preset !== 'reels'); prev.innerHTML = `<img src="/api/v1/renders/${esc(r.id)}/poster.jpg" alt=""><div class="play"><span>▶</span></div>`; prev.onclick = () => { const v = document.createElement('video'); v.src = `/api/v1/renders/${r.id}/video`; v.controls = true; v.autoplay = true; v.playsInline = true; v.preload = 'auto'; prev.innerHTML = ''; prev.appendChild(v); prev.onclick = null; v.play().catch(() => {}); }; }
-    d.querySelector('.links').innerHTML = r.status === 'DONE' ? `<a class="btn xs tonal" href="/api/v1/renders/${esc(r.id)}/video?download=true">${icon('download', 's')}MP4</a>${r.captions_path ? `<a class="btn xs" href="/api/v1/renders/${esc(r.id)}/captions.srt">SRT</a>` : ''}<span class="k ellipsis" style="max-width:160px" title="${attr(r.output_path)}">${esc((r.output_path || '').split('/').slice(-1)[0])}</span><button class="btn xs" data-del="${esc(r.id)}" style="margin-left:auto">${icon('trash', 's')}</button>` : `<button class="btn xs" data-del="${esc(r.id)}" ${r.status === 'RENDERING' ? 'disabled' : ''} style="margin-left:auto">${icon('trash', 's')}</button>`;
+    d.querySelector('.links').innerHTML = r.status === 'DONE' ? `<a class="btn xs tonal" href="/api/v1/renders/${esc(r.id)}/video?download=true">${icon('download', 's')}MP4</a><span class="exp"><button class="btn xs" title="open this edit in another editor">${icon('open', 's')}timeline</button><span class="menu"><a href="/api/v1/renders/${esc(r.id)}/export?format=fcpxml">FCPXML · Resolve / Final Cut</a><a href="/api/v1/renders/${esc(r.id)}/export?format=edl">EDL · Premiere, Avid</a><a href="/api/v1/renders/${esc(r.id)}/export?format=srt">SRT · captions</a><a href="/api/v1/renders/${esc(r.id)}/export?format=json">JSON · the raw edit</a></span></span>${r.captions_path ? `<a class="btn xs" href="/api/v1/renders/${esc(r.id)}/captions.srt">SRT</a>` : ''}<span class="k ellipsis" style="max-width:160px" title="${attr(r.output_path)}">${esc((r.output_path || '').split('/').slice(-1)[0])}</span><button class="btn xs" data-del="${esc(r.id)}" style="margin-left:auto">${icon('trash', 's')}</button>` : `<button class="btn xs" data-del="${esc(r.id)}" ${r.status === 'RENDERING' ? 'disabled' : ''} style="margin-left:auto">${icon('trash', 's')}</button>`;
     const dl = d.querySelector('[data-del]'); if (dl) dl.onclick = async () => { if (!(await confirmDialog({ title: 'Delete this render?', body: 'The MP4, poster and captions are removed.', ok: 'Delete', danger: true }))) return; try { await del('/renders/' + r.id); d.remove(); toast('Render deleted'); } catch (e) { toast(e.message, true); } };
   }
 }

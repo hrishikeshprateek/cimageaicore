@@ -256,6 +256,27 @@ input[type=checkbox],input[type=radio]{accent-color:var(--g-blue);width:18px;hei
 .tele .tinner p{margin:0 0 .8em}
 @media(max-width:900px){.scene{grid-template-columns:76px minmax(0,1fr);gap:10px}.scene .broll{grid-column:1;width:76px}.scene .fields{grid-column:2}.scene .sbtns{grid-column:2;flex-direction:row}.idea-wrap textarea{padding-right:16px;padding-bottom:56px}.mic{top:auto;bottom:10px;right:10px}}
 
+/* ---------- the studio's speech lane: every measured sentence, clickable ---------- */
+.speech{margin-top:26px}
+.speech .lane{position:relative;height:46px;border-radius:var(--r);background:var(--g-grey-100);overflow:hidden;border:1px solid var(--divider)}
+.speech .sent{position:absolute;top:4px;bottom:4px;border-radius:4px;background:var(--card);border:1px solid var(--line);cursor:pointer;overflow:hidden;
+  display:flex;align-items:center;padding:0 5px;transition:background .12s,border-color .12s,transform .08s}
+.speech .sent i{font-style:normal;font-size:10.5px;line-height:1.15;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.speech .sent:hover{border-color:var(--g-blue);transform:translateY(-1px);z-index:2;box-shadow:var(--shadow-1)}
+.speech .sent.on{background:var(--sel-bg);border-color:var(--g-blue)}.speech .sent.on i{color:var(--sel-ink)}
+.speech .sent.open::after{content:"";position:absolute;right:0;top:0;bottom:0;width:3px;background:var(--g-yellow)}
+.speech .lanefoot{display:flex;align-items:center;gap:8px;margin-top:6px}
+.speech .nospeech{display:flex;align-items:center;gap:10px;min-height:46px;padding:0 12px;border:1px dashed var(--line);border-radius:var(--r);background:var(--g-grey-50)}
+.saysbox{margin-top:12px;padding:12px 14px;border-radius:var(--r);background:var(--g-grey-50);border:1px solid var(--divider)}
+.saysbox p{margin:6px 0 8px;font-size:15px;line-height:1.55;color:var(--ink)}
+/* export menu on a finished render */
+.exp{position:relative;display:inline-flex}
+.exp .menu{position:absolute;bottom:calc(100% + 6px);left:0;min-width:230px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:var(--shadow-3);padding:6px;display:none;flex-direction:column;z-index:30}
+.exp:hover .menu,.exp:focus-within .menu{display:flex}
+.exp .menu a{padding:8px 10px;border-radius:6px;font-size:13px;color:var(--ink-2);text-decoration:none;white-space:nowrap}
+.exp .menu a:hover{background:var(--hover);color:var(--ink);text-decoration:none}
+
 /* ---------- dialog / snackbar ---------- */
 dialog{border:0;border-radius:var(--r);padding:0;background:var(--card);color:var(--ink);width:min(560px,94vw);box-shadow:var(--shadow-3)}
 dialog::backdrop{background:rgba(0,0,0,.32)}
@@ -352,6 +373,18 @@ img,video,canvas{max-width:100%}
 .card,.kpi,.g2>*,.g3>*,.gauto>*,.review>*,.studio>*,.framing>*,.kpis>*{min-width:0}
 .tw{max-width:100%}
 .g2.even{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+/* ---------- collapsible menu: the same rail the narrow-window rule uses, on demand (button or "[") ---------- */
+.menu-toggle{flex:none;color:var(--ink-3)}.menu-toggle:hover{color:var(--ink)}.menu-toggle.on{background:var(--sel-bg);color:var(--sel-ink)}
+html.rail .shell{grid-template-columns:var(--rail-w) minmax(0,1fr)}
+html.rail .nav{padding:8px 0}
+html.rail .nav .brand-sub,html.rail .nav .logo-full,html.rail .nav .sec,html.rail .nav .foot,html.rail .nav a.item .lbl,html.rail .nav a.item .ext-ic{display:none}
+html.rail .nav .logo-mark{display:block}
+html.rail .nav .brand{align-items:center;padding:12px 0 8px;margin-bottom:4px}
+html.rail .nav a.item{justify-content:center;padding:0;margin:2px 10px;border-radius:var(--r);height:44px;position:relative}
+html.rail .nav a.item .badge{position:absolute;top:4px;right:6px;min-width:16px;height:16px;padding:0 4px;font-size:10px;line-height:16px}
+.shell,.nav{transition:grid-template-columns .18s ease,padding .18s ease}
+@media(max-width:760px){.menu-toggle{display:none}}
+
 @media(max-width:1180px){.shell{grid-template-columns:var(--rail-w) minmax(0,1fr)}.nav{padding:8px 0}.nav .brand-sub,.nav .logo-full,.nav .sec,.nav .foot,.nav a.item .lbl{display:none}.nav .logo-mark{display:block}.nav .brand{align-items:center;padding:12px 0 8px;margin-bottom:4px}
   .nav a.item{flex-direction:column;justify-content:center;height:56px;margin:0 8px 4px;padding:0;gap:2px;border-radius:12px;position:relative}.nav a.item .badge{position:absolute;top:6px;right:10px;margin:0}
   .g2.even{grid-template-columns:minmax(0,1fr)}}
