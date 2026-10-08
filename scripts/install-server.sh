@@ -117,6 +117,24 @@ $SUDO systemctl daemon-reload
 $SUDO systemctl enable ${SERVICE_NAME} >/dev/null
 $SUDO systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null 2>&1 || true
 
+
+# The transcript model (word-level timings behind precise reel cuts) downloads once, ~1.6 GB, into the data volume -
+# fetch it now so the first analysed video is not held up by it. SKIP_MODELS=1 to leave it for later.
+prefetch_models() {
+  if [ "${SKIP_MODELS:-0}" = "1" ]; then say "skipping the transcript model download (SKIP_MODELS=1)"; return 0; fi
+  case "$(grep -E '^TRANSCRIBE_PROVIDER=' .env 2>/dev/null | cut -d= -f2- | tr -d ' ')" in
+    none|mock|off) say "word-level transcripts are off - no model needed"; return 0 ;;
+  esac
+  local model; model="$(grep -E '^WHISPER_MODEL=' .env 2>/dev/null | cut -d= -f2- | tr -d ' ')"
+  say "Fetching the transcript model (${model:-large-v3-turbo}, ~1.6 GB, once) into ./data/models"
+  $DOCKER compose run --rm --no-deps -T api python -c "
+from faster_whisper import WhisperModel
+import os
+WhisperModel(os.environ.get('WHISPER_MODEL') or 'large-v3-turbo', device='auto', compute_type='int8', download_root='/data/models')
+print('model ready')
+" || say "Model download did not finish - it will happen on the first analysed video instead"
+}
+
 # ---------------------------------------------------------------- 5. build + start
 export GIT_SHA="$(git rev-parse --short HEAD)" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 $DOCKER compose pull -q postgres redis ollama 2>/dev/null || $DOCKER compose pull -q --ignore-buildable 2>/dev/null || true
@@ -127,6 +145,7 @@ else
   say "Building the api image from source at commit $GIT_SHA (3-6 minutes the first time; later builds reuse cached layers)"
   $DOCKER compose build --pull api
 fi
+prefetch_models
 $DOCKER compose up -d --remove-orphans
 $DOCKER image prune -f >/dev/null 2>&1 || true   # drop superseded image layers so rebuilds don't fill the disk
 say "Waiting for the API to become healthy"
