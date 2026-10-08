@@ -268,7 +268,7 @@ Measurement is queued, never inline, so a long video never holds up embeddings o
 
 ## The edit studio (V1.4)
 
-Reels studio opens as an editor, laid out the way an editor is: **Sources** on the left, the **program monitor** in the
+Reels studio opens as an editor, laid out and coloured the way an editor is — a dark, full-height workspace so the picture is the brightest thing on screen: **Sources** on the left, the **program monitor** in the
 middle, the **clip inspector** on the right, and a **timeline** across the bottom. The AI fills the timeline in; the rest
 is ordinary editing.
 
@@ -284,6 +284,9 @@ is ordinary editing.
 * **Inspector**: label, text on screen, ±0.2 s/±1 s nudges, snap-to-sentence, Auto/Fill/Fit, focus, follow-the-speaker
   (face tracking for that clip), mute.
 * **Render** stitches it through the storyboard renderer; **Export** hands the same edit to Resolve or Premiere.
+* The monitor frames the real output shape (9:16 / 1:1 / 16:9), clips on the track are **filmstrips** of their own first
+  frame with the source badged on footage borrowed from another video, and the whole page fits the window - panels
+  scroll inside themselves, nothing pushes the timeline off screen.
 
 It saves itself as you work (`timelines` table). API: `POST/GET/PUT/DELETE /api/v1/timelines`, `POST …/clips`,
 `POST …/render`, `GET …/export`, plus `POST /api/v1/jobs/{id}/track` for one clip's crop path. Measured: four clips from

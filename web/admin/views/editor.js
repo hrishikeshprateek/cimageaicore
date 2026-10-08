@@ -12,7 +12,10 @@ const tc = (t) => `${Math.floor(Math.max(0, t) / 60)}:${String(Math.floor(Math.m
 const starts = () => { let a = 0; return TL.clips.map((c) => { const s = a; a += c.seconds; return s; }); };
 const clipAt = (t) => { const st = starts(); for (let i = TL.clips.length - 1; i >= 0; i--) if (t >= st[i] - 1e-6) return { i, clip: TL.clips[i], start: st[i] }; return null; };
 
+const page = () => document.getElementById('view');
+
 export async function mount(el, { job, jobs }) {
+  if (page()) page().classList.add('studio-page');
   host = el; JOB = job; JOBS = (jobs || []).filter((j) => j.source && j.source.path); SRC = job ? job.id : (JOBS[0] || {}).id;
   SEL = null; HEAD = 0;
   host.innerHTML = `<div class="nle"><div class="nle-loading"><span class="spin"></span> opening the edit…</div></div>`;
@@ -27,9 +30,12 @@ export async function mount(el, { job, jobs }) {
     catch (err) { host.innerHTML = `<div class="nle"><div class="banner err" style="margin:16px">${icon('warn')}<div>${esc(err.message)}</div></div></div>`; return; }
   }
   draw(); fitZoom(); bindKeys(); pollRenders();
+  if (TL.clips.length) { SEL = TL.clips[0].id; drawTimeline(); drawInspector(); }   // open on the first clip, with a picture on the monitor
+  seek(0);
 }
 
 export function unmount() {
+  if (page()) page().classList.remove('studio-page');
   stop(); clearTimeout(SAVE_T); clearTimeout(POLL);
   if (keys) document.removeEventListener('keydown', keys);
   keys = null; host = null; TL = null; SEL = null;
@@ -49,16 +55,18 @@ function draw() {
             <a href="/api/v1/timelines/${esc(TL.id)}/export?format=edl">EDL · Premiere, Avid</a>
             <a href="/api/v1/timelines/${esc(TL.id)}/export?format=srt">SRT · captions</a>
             <a href="/api/v1/timelines/${esc(TL.id)}/export?format=json">JSON · the raw edit</a></span></span></div>
-        <div class="screen"><video id="pv" preload="metadata" playsinline></video><div class="burn" id="burn"></div></div>
+        <div class="stage"><div class="frame ${TL.preset}" id="frame"><video id="pv" preload="metadata" playsinline></video><div class="burn" id="burn" hidden></div></div></div>
         <div class="transport">
-          <button class="btn sm" id="tstart" title="start (Home)">⏮</button>
-          <button class="btn sm" id="tprev" title="previous clip (↑)">◀◀</button>
+          <button class="btn sm" id="tstart" title="back to the start (Home)">⏮</button>
+          <button class="btn sm" id="tprev" title="previous clip">⏪</button>
           <button class="btn sm filled" id="tplay" title="play / pause (space)">${icon('play', 's')}</button>
-          <button class="btn sm" id="tnext" title="next clip (↓)">▶▶</button>
-          <span class="tcbox"><b id="tcnow">0:00.0</b> / <span id="tctot">0:00.0</span></span>
+          <button class="btn sm" id="tnext" title="next clip">⏩</button>
+          <span class="tcbox"><b id="tcnow">0:00.0</b> <span>/ <span id="tctot">0:00.0</span></span></span>
           <span class="sp"></span><span class="muted body-s" id="tclip"></span></div>
       </section>
-      <aside class="pane insp"><div class="ph"><b>Clip</b><span class="sp"></span><span class="muted body-s" id="inspid"></span></div><div class="pb" id="inspbody"></div></aside>
+      <aside class="pane insp"><div class="ph"><b>Clip</b><span class="sp"></span><span class="muted body-s" id="inspid"></span></div>
+        <div class="pb" id="inspbody"></div>
+        <div class="renders" id="renders"></div></aside>
     </div>
     <div class="nle-tl">
       <div class="tlbar">
@@ -70,7 +78,8 @@ function draw() {
         <label class="check xs" title="edges stick to clip boundaries and sentence ends"><input type="checkbox" id="bsnap" checked> snap</label>
         <span class="sp"></span>
         <span class="muted body-s" id="tlstat"></span>
-        <button class="btn xs" id="zout" title="zoom out">−</button><button class="btn xs" id="zin" title="zoom in">+</button><button class="btn xs" id="zfit" title="fit">fit</button>
+        <span class="zoomer"><button class="btn xs" id="zout" title="zoom out (−)">−</button><input type="range" id="zoom" min="0" max="100" value="30" title="zoom">
+          <button class="btn xs" id="zin" title="zoom in (+)">+</button><button class="btn xs" id="zfit" title="fit the whole edit">fit</button></span>
       </div>
       <div class="tlscroll" id="tlscroll"><div class="tlinner" id="tlinner">
         <div class="ruler" id="ruler"></div>
@@ -78,11 +87,10 @@ function draw() {
         <div class="trk t" id="trkt"></div>
         <div class="head" id="head"></div>
       </div></div>
-    </div>
-    <div id="renders" class="tlrenders"></div></div>`;
+    </div></div>`;
 
   $('#tltitle').oninput = (e) => { TL.title = e.target.value; save(); };
-  $('#preset').onchange = (e) => { TL.preset = e.target.value; save(true); };
+  $('#preset').onchange = (e) => { TL.preset = e.target.value; const f = $('#frame'); if (f) f.className = 'frame ' + TL.preset; save(true); };
   $('#render').onclick = renderNow;
   $('#tplay').onclick = toggle;
   $('#tstart').onclick = () => seek(0);
@@ -92,6 +100,7 @@ function draw() {
   $('#baicuts').onclick = aiCuts;
   $('#bsnap').onchange = (e) => { SNAP = e.target.checked; };
   $('#zin').onclick = () => zoom(1.5); $('#zout').onclick = () => zoom(1 / 1.5); $('#zfit').onclick = fitZoom;
+  $('#zoom').oninput = (e) => { PX = Math.max(2, Math.min(400, 2 * Math.pow(200, +e.target.value / 100))); drawTimeline(); };
   $('#tlscroll').addEventListener('wheel', (e) => { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); zoom(e.deltaY < 0 ? 1.12 : 1 / 1.12); }, { passive: false });
   drawSources(); drawTimeline(); drawInspector();
 }
@@ -145,8 +154,9 @@ async function aiCuts() {
 }
 
 // ---------------------------------------------------------------- the timeline
-function zoom(f) { PX = Math.max(2, Math.min(400, PX * f)); drawTimeline(); }
-function fitZoom() { const w = $('#tlscroll') ? $('#tlscroll').clientWidth - 24 : 900; PX = Math.max(2, w / Math.max(4, total())); drawTimeline(); }
+function zoom(f) { PX = Math.max(2, Math.min(400, PX * f)); syncZoom(); drawTimeline(); }
+function syncZoom() { const z = $('#zoom'); if (z) z.value = Math.round(100 * Math.log(PX / 2) / Math.log(200)); }
+function fitZoom() { const w = $('#tlscroll') ? $('#tlscroll').clientWidth - 28 : 900; PX = Math.max(2, w / Math.max(4, total())); syncZoom(); drawTimeline(); }
 
 function drawTimeline() {
   if (!TL || !$('#trkv')) return;
@@ -164,8 +174,10 @@ function drawTimeline() {
   $('#trkv').innerHTML = TL.clips.map((c, i) => {
     const other = c.job_id && JOB && c.job_id !== JOB.id;
     return `<div class="cl${other ? ' other' : ''}${c.kind !== 'clip' ? ' still' : ''}${c.id === SEL ? ' sel' : ''}" data-id="${attr(c.id)}" data-i="${i}"
-      style="left:${st[i] * PX}px;width:${Math.max(6, c.seconds * PX - 2)}px" title="${attr((c.label || 'clip') + '\n' + ts(c.in_seconds) + ' → ' + ts(c.out_seconds))}">
+      style="left:${st[i] * PX}px;width:${Math.max(8, c.seconds * PX - 2)}px;--thumb:url('/api/v1/jobs/${esc(c.job_id)}/frame?at=${(c.in_seconds + 0.4).toFixed(2)}&width=150')"
+      title="${attr((c.label || 'clip') + '\n' + ts(c.in_seconds) + ' → ' + ts(c.out_seconds))}">
       <span class="h l" data-edge="in"></span>
+      ${other ? `<span class="src">${esc(((JOBS.find((j) => j.id === c.job_id) || {}).source || {}).name || 'other').slice(0, 14)}</span>` : ''}
       <span class="body"><b>${esc(c.label || 'clip')}</b><span class="k">${c.seconds.toFixed(1)}s${c.mute ? ' · muted' : ''}${(c.track || []).length ? ' · tracked' : ''}</span></span>
       <span class="h r" data-edge="out"></span></div>`;
   }).join('');
@@ -395,15 +407,15 @@ async function pollRenders() {
   try { list = (await api('/renders?job_id=' + encodeURIComponent(TL.jobs[0] || ''))).filter((r) => (r.detail || {}).timeline_id === TL.id); } catch { /* ignore */ }
   const el = $('#renders');
   if (el) {
-    el.innerHTML = list.length ? `<div class="overline" style="margin:14px 0 8px">Renders of this edit</div><div class="g3">` + list.slice(0, 6).map((r) => {
+    el.innerHTML = list.length ? `<div class="rhd"><b>Renders</b><span class="sp"></span><span class="muted body-s">${list.length}</span></div>` + list.slice(0, 4).map((r) => {
       const busy = r.status === 'QUEUED' || r.status === 'RENDERING', p = (r.detail || {}).progress;
       return `<div class="evb"><div class="row"><span class="tag ${r.status === 'DONE' ? 'ok' : r.status === 'FAILED' ? 'err' : 'pending'}">${esc(r.status.toLowerCase())}${p ? ` · ${p.scene}/${p.of}` : ''}</span>
         <span class="muted body-s">${r.duration_seconds ? r.duration_seconds.toFixed(1) + 's' : ''}${r.size_bytes ? ' · ' + (r.size_bytes / 1e6).toFixed(1) + ' MB' : ''}</span><span class="sp"></span>
         ${r.status === 'DONE' ? `<a class="btn xs tonal" href="/api/v1/renders/${esc(r.id)}/video?download=true">${icon('download', 's')}</a>` : ''}</div>
         ${busy ? '<div class="progress" style="margin-top:8px"></div>' : ''}
         ${r.error ? `<div class="banner err" style="margin-top:8px">${icon('warn')}<div class="mono">${esc(r.error)}</div></div>` : ''}
-        ${r.status === 'DONE' ? `<video controls preload="none" poster="/api/v1/renders/${esc(r.id)}/poster.jpg" src="/api/v1/renders/${esc(r.id)}/video" style="margin-top:8px;width:100%;max-height:300px;border-radius:6px;background:#000"></video>` : ''}</div>`;
-    }).join('') + '</div>' : '';
+        ${r.status === 'DONE' ? `<video controls preload="none" poster="/api/v1/renders/${esc(r.id)}/poster.jpg" src="/api/v1/renders/${esc(r.id)}/video" style="margin-top:8px;width:100%;max-height:190px;border-radius:6px;background:#000"></video>` : ''}</div>`;
+    }).join('') : '';
   }
   if (list.some((r) => r.status === 'QUEUED' || r.status === 'RENDERING')) POLL = setTimeout(pollRenders, 2500);
 }
