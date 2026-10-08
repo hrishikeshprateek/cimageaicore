@@ -162,6 +162,7 @@ def pg_app_video(test_db_url, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setenv("WATCHER_ENABLED", "false")
     monkeypatch.setenv("AUTO_DRAFT", "false")
     monkeypatch.setenv("TTS_PROVIDER", "mock")
+    monkeypatch.setenv("TRANSCRIBE_PROVIDER", "mock")   # never download a model in a test
     monkeypatch.setenv("COMPOSER_ENABLED", "true")
     monkeypatch.setenv("COMPOSER_TEMPLATES_DIR", str(tmp_path / "templates"))
     monkeypatch.setenv("COMPOSER_RENDERS_DIR", str(tmp_path / "renders"))
