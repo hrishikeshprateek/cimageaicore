@@ -2,7 +2,7 @@
 // timeline along the bottom. The AI fills the timeline in; everything after that is ordinary editing.
 import { api, post, put, del, esc, attr, icon, ts, toast, confirmDialog, emptyState } from '../core.js';
 
-let host = null, TL = null, JOBS = [], JOB = null, SEL = null, SRC = null, SWITCH = null;       // SRC: the video open in the sources panel
+let host = null, TL = null, JOBS = [], JOB = null, SEL = null, SRC = null, SWITCH = null, DRAG_SRC = null;       // SRC: the video open in the sources panel
 let PX = 24, HEAD = 0, PLAYING = false, TIMER = null, SAVE_T = null, POLL = null, dirty = false, SNAP = true, keys = null, RESIZE = null, RESIZE_T = null, RO = null;
 const $ = (s) => host && host.querySelector(s);
 const $$ = (s) => host ? [...host.querySelectorAll(s)] : [];
@@ -10,6 +10,8 @@ const clip = (id) => (TL ? TL.clips.find((c) => c.id === id) : null);
 const total = () => (TL ? TL.clips.reduce((a, c) => a + c.seconds, 0) : 0);
 const tc = (t) => `${Math.floor(Math.max(0, t) / 60)}:${String(Math.floor(Math.max(0, t) % 60)).padStart(2, '0')}.${Math.floor((Math.max(0, t) % 1) * 10)}`;
 const starts = () => { let a = 0; return TL.clips.map((c) => { const s = a; a += c.seconds; return s; }); };
+const SRC_COLOURS = ['#4f9cf9', '#b388f0', '#5fd0a0', '#e8b55f', '#f0888a', '#66d2e8'];
+const colourOf = (jobId) => SRC_COLOURS[Math.max(0, TL.jobs.indexOf(jobId)) % SRC_COLOURS.length];
 const clipAt = (t) => { const st = starts(); for (let i = TL.clips.length - 1; i >= 0; i--) if (t >= st[i] - 1e-6) return { i, clip: TL.clips[i], start: st[i] }; return null; };
 
 const page = () => document.getElementById('view');
@@ -97,12 +99,21 @@ function draw() {
         <span class="zoomer"><button class="btn xs" id="zout" title="zoom out (−)">−</button><input type="range" id="zoom" min="0" max="100" value="30" title="zoom">
           <button class="btn xs" id="zin" title="zoom in (+)">+</button><button class="btn xs" id="zfit" title="fit the whole edit">fit</button></span>
       </div>
-      <div class="tlscroll" id="tlscroll"><div class="tlinner" id="tlinner">
-        <div class="ruler" id="ruler"></div>
-        <div class="trk v" id="trkv"></div>
-        <div class="trk t" id="trkt"></div>
-        <div class="head" id="head"></div>
-      </div></div>
+      <div class="tlbody">
+        <div class="gutter">
+          <div class="gh"></div>
+          <div class="trkh v"><b>V1</b><span>video</span></div>
+          <div class="trkh t"><b>TXT</b><span>on screen</span></div>
+        </div>
+        <div class="tlscroll" id="tlscroll"><div class="tlinner" id="tlinner">
+          <div class="ruler" id="ruler"></div>
+          <div class="trk v" id="trkv"></div>
+          <div class="trk t" id="trkt"></div>
+          <div class="head" id="head"></div>
+          <div class="caret" id="caret" hidden></div>
+        </div></div>
+      </div>
+      <div class="legend" id="legend"></div>
     </div></div>`;
 
   $$('.segmode button').forEach((b) => b.onclick = () => { if (b.dataset.sw === 'cut' && SWITCH) SWITCH('cut'); });
@@ -154,12 +165,30 @@ async function openSource(id, keep) {
   box.innerHTML = `${cutRows ? `<div class="overline">Proposed by the AI</div>${cutRows}` : ''}
     ${sentRows ? `<div class="overline" style="margin-top:10px">Sentences${tr.ready ? '' : ''}</div><div class="sentscroll">${sentRows}</div>`
       : '<div class="muted body-s" style="padding:6px 0">No measured sentences for this video yet.</div>'}`;
-  box.querySelectorAll('.srcitem').forEach((n) => n.onclick = () => addClip(SRC, +n.dataset.a, +n.dataset.b, n.dataset.l));
+  box.querySelectorAll('.srcitem').forEach((n) => {
+    n.onclick = () => addClip(SRC, +n.dataset.a, +n.dataset.b, n.dataset.l);
+    n.addEventListener('pointerdown', (e) => {          // or drag it onto the timeline, where you want it
+      if (e.target.closest('.btn')) return;
+      const start = { x: e.clientX, y: e.clientY };
+      const move = (ev) => {
+        if (DRAG_SRC || Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 6) return;
+        DRAG_SRC = { job: SRC, a: +n.dataset.a, b: +n.dataset.b, label: n.dataset.l };
+        document.body.classList.add('dragging-src');
+      };
+      const up = () => {
+        document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+        setTimeout(() => { if (DRAG_SRC) { DRAG_SRC = null; document.body.classList.remove('dragging-src'); const c = $('#caret'); if (c) c.hidden = true; } }, 30);
+      };
+      document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+    });
+  });
 }
 
-async function addClip(job_id, a, b, label) {
-  try { TL = await post(`/timelines/${TL.id}/clips`, { job_id, in_seconds: a, out_seconds: b, label }); drawTimeline(); fitZoom(); toast('Added to the timeline'); }
-  catch (e) { toast(e.message, true); }
+async function addClip(job_id, a, b, label, at) {
+  try {
+    TL = await post(`/timelines/${TL.id}/clips`, { job_id, in_seconds: a, out_seconds: b, label, at: at ?? null });
+    drawTimeline(); fitZoom(); toast('Added to the timeline');
+  } catch (e) { toast(e.message, true); }
 }
 
 async function aiCuts() {
@@ -206,16 +235,18 @@ function drawTimeline() {
   $('#ruler').innerHTML = marks;
 
   const st = starts();
-  $('#trkv').innerHTML = TL.clips.map((c, i) => {
-    const other = c.job_id && JOB && c.job_id !== JOB.id;
-    return `<div class="cl${other ? ' other' : ''}${c.kind !== 'clip' ? ' still' : ''}${c.id === SEL ? ' sel' : ''}" data-id="${attr(c.id)}" data-i="${i}"
-      style="left:${st[i] * PX}px;width:${Math.max(8, c.seconds * PX - 2)}px;--thumb:url('/api/v1/jobs/${esc(c.job_id)}/frame?at=${(c.in_seconds + 0.4).toFixed(2)}&width=150')"
+  $('#trkv').innerHTML = TL.clips.map((c, i) => `<div class="cl${c.kind !== 'clip' ? ' still' : ''}${c.id === SEL ? ' sel' : ''}" data-id="${attr(c.id)}" data-i="${i}"
+      style="left:${st[i] * PX}px;width:${Math.max(8, c.seconds * PX - 2)}px;--tone:${colourOf(c.job_id)};--thumb:url('/api/v1/jobs/${esc(c.job_id)}/frame?at=${(c.in_seconds + 0.4).toFixed(2)}&width=150')"
       title="${attr((c.label || 'clip') + '\n' + ts(c.in_seconds) + ' → ' + ts(c.out_seconds))}">
       <span class="h l" data-edge="in"></span>
-      ${other ? `<span class="src">${esc(((JOBS.find((j) => j.id === c.job_id) || {}).source || {}).name || 'other').slice(0, 14)}</span>` : ''}
       <span class="body"><b>${esc(c.label || 'clip')}</b><span class="k">${c.seconds.toFixed(1)}s${c.mute ? ' · muted' : ''}${(c.track || []).length ? ' · tracked' : ''}</span></span>
-      <span class="h r" data-edge="out"></span></div>`;
-  }).join('');
+      <span class="h r" data-edge="out"></span></div>`).join('');
+  const lg = $('#legend');
+  if (lg) lg.innerHTML = TL.jobs.length > 1 ? TL.jobs.map((j) => {
+    const name = ((JOBS.find((x) => x.id === j) || {}).source || {}).name || j;
+    const n = TL.clips.filter((c) => c.job_id === j).length;
+    return `<span class="lg"><i style="background:${colourOf(j)}"></i>${esc(name.slice(0, 26))}<b>${n}</b></span>`;
+  }).join('') : '';
   $('#trkt').innerHTML = TL.clips.map((c, i) => (c.text || (c.captions || []).length)
     ? `<div class="txt" data-id="${attr(c.id)}" style="left:${st[i] * PX}px;width:${Math.max(6, c.seconds * PX - 2)}px" title="${attr(c.text || (c.captions[0] || {}).text || '')}">${esc(c.text || (c.captions[0] || {}).text || '')}</div>`
     : '').join('');
@@ -224,41 +255,96 @@ function drawTimeline() {
 }
 
 function bindTrack() {
-  const inner = $('#tlinner'), trk = $('#trkv');
-  let mode = null, id = null, startX = 0, base = null;
+  const inner = $('#tlinner'), trk = $('#trkv'), caret = $('#caret');
+  let mode = null, id = null, startX = 0, base = null, ghost = null, dropAt = null, moved = false;
   const atX = (e) => Math.max(0, (e.clientX - inner.getBoundingClientRect().left) / PX);
+
+  /** Where would a clip dropped at this x land? Returns the index it takes, and draws the caret there. */
+  function dropIndex(e, skipId) {
+    const st = starts(), x = atX(e);
+    let idx = TL.clips.length;
+    for (let i = 0; i < TL.clips.length; i++) {
+      if (TL.clips[i].id === skipId) continue;
+      if (x < st[i] + TL.clips[i].seconds / 2) { idx = i; break; }
+    }
+    const before = TL.clips[idx];
+    const pos = before ? st[TL.clips.indexOf(before)] : starts().reduce((a, _, i, arr) => arr[i] + TL.clips[i].seconds, 0) || total();
+    caret.hidden = false;
+    caret.style.left = (Math.max(0, before ? pos : total()) * PX) + 'px';
+    return idx;
+  }
+  function endDrag() {
+    caret.hidden = true;
+    if (ghost) { ghost.remove(); ghost = null; }
+    trk.querySelectorAll('.cl').forEach((n) => n.classList.remove('dragging', 'lifted'));
+  }
 
   trk.querySelectorAll('.cl').forEach((n) => {
     n.addEventListener('pointerdown', (e) => {
       const c = clip(n.dataset.id); if (!c) return;
-      e.stopPropagation(); select(c.id);
+      e.stopPropagation(); e.preventDefault(); select(c.id);
       mode = e.target.dataset.edge ? 'trim:' + e.target.dataset.edge : 'move';
-      id = c.id; startX = e.clientX; base = { ...c };
-      try { n.setPointerCapture(e.pointerId); } catch { /* a synthetic or already-released pointer */ }
+      id = c.id; startX = e.clientX; base = { ...c }; moved = false;
+      try { n.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
       n.classList.add('dragging');
     });
     n.addEventListener('pointermove', (e) => {
       if (!mode || id !== n.dataset.id) return;
       const c = clip(id), dt = (e.clientX - startX) / PX;
-      if (mode === 'trim:in') c.in_seconds = Math.max(0, Math.min(base.in_seconds + dt, c.out_seconds - 0.3));
-      else if (mode === 'trim:out') c.out_seconds = Math.max(c.in_seconds + 0.3, base.out_seconds + dt);
-      else {
-        const x = atX(e), st = starts(); let target = TL.clips.length - 1;
-        for (let i = 0; i < TL.clips.length; i++) if (x < st[i] + TL.clips[i].seconds / 2) { target = i; break; }
-        const cur = TL.clips.indexOf(c);
-        if (target !== cur) { TL.clips.splice(cur, 1); TL.clips.splice(target, 0, c); }
+      if (Math.abs(e.clientX - startX) > 2) moved = true;
+      if (mode === 'trim:in') { c.in_seconds = Math.max(0, Math.min(base.in_seconds + dt, c.out_seconds - 0.3)); recompute(); drawTimeline(); }
+      else if (mode === 'trim:out') { c.out_seconds = Math.max(c.in_seconds + 0.3, base.out_seconds + dt); recompute(); drawTimeline(); }
+      else if (moved) {
+        if (!ghost) {     // lift it: a floating copy follows the pointer while the caret shows where it will land
+          ghost = n.cloneNode(true);
+          ghost.className = 'cl ghost';
+          ghost.style.width = n.style.width;
+          ghost.style.setProperty('--tone', getComputedStyle(n).getPropertyValue('--tone'));
+          ghost.style.setProperty('--thumb', getComputedStyle(n).getPropertyValue('--thumb'));
+          inner.appendChild(ghost);
+          n.classList.add('lifted');
+        }
+        ghost.style.left = (atX(e) * PX - (n.offsetWidth / 2)) + 'px';
+        dropAt = dropIndex(e, id);
       }
-      recompute(); drawTimeline();
     });
-    const end = () => { if (!mode) return; mode = null; n.classList.remove('dragging'); if (SNAP) snapClip(clip(id)); save(); drawInspector(); };
-    n.addEventListener('pointerup', end); n.addEventListener('pointercancel', end);
+    const finish = () => {
+      if (!mode) return;
+      const c = clip(id);
+      if (mode === 'move' && ghost && dropAt !== null) {
+        const from = TL.clips.indexOf(c);
+        let to = dropAt > from ? dropAt - 1 : dropAt;
+        to = Math.max(0, Math.min(to, TL.clips.length - 1));
+        if (to !== from) { TL.clips.splice(from, 1); TL.clips.splice(to, 0, c); }
+      }
+      mode = null; dropAt = null; endDrag();
+      recompute(); drawTimeline();
+      if (SNAP && base && (base.in_seconds !== c.in_seconds || base.out_seconds !== c.out_seconds)) snapClip(c);
+      save(); drawInspector();
+    };
+    n.addEventListener('pointerup', finish);
+    n.addEventListener('pointercancel', finish);
     n.addEventListener('dblclick', () => { const c = clip(n.dataset.id); if (c) { seek(starts()[TL.clips.indexOf(c)]); play(); } });
   });
 
-  // the playhead: click or drag anywhere on the ruler or empty track
-  const scrub = (e) => { seek(Math.min(total(), Math.max(0, (e.clientX - inner.getBoundingClientRect().left) / PX))); };
+  // dropping a source item: the sources panel sets DRAGGING_SRC, the track shows where it would land
+  inner.onpointermove = (e) => { if (DRAG_SRC) dropIndex(e, null); };
+  inner.onpointerup = async (e) => {
+    if (!DRAG_SRC) return;
+    const at = dropIndex(e, null);
+    const d = DRAG_SRC; DRAG_SRC = null; caret.hidden = true;
+    document.body.classList.remove('dragging-src');
+    await addClip(d.job, d.a, d.b, d.label, at);
+  };
+
+  const scrub = (e) => { seek(Math.min(total(), Math.max(0, atX(e)))); };
   [$('#ruler'), $('#trkv'), $('#trkt')].forEach((lane) => {
-    lane.addEventListener('pointerdown', (e) => { if (e.target.closest('.cl') || e.target.closest('.txt')) return; stop(); scrub(e); try { lane.setPointerCapture(e.pointerId); } catch { /* ignore */ } lane.dataset.scrub = '1'; });
+    lane.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.cl') || e.target.closest('.txt') || DRAG_SRC) return;
+      stop(); scrub(e);
+      try { lane.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      lane.dataset.scrub = '1';
+    });
     lane.addEventListener('pointermove', (e) => { if (lane.dataset.scrub) scrub(e); });
     const stopScrub = () => delete lane.dataset.scrub;
     lane.addEventListener('pointerup', stopScrub); lane.addEventListener('pointercancel', stopScrub);

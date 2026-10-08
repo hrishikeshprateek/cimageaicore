@@ -23,7 +23,7 @@ export async function render(el, params, c) {
 }
 
 export async function tick() { if (!root || !SYSTEM || !SYSTEM.enabled || MODE === 'edit') return; await refreshJobs(); await refreshRenders(false); }
-export function destroy() { if (keyHandler) document.removeEventListener('keydown', keyHandler); keyHandler = null; clearTimeout(FR_TIMER); editor.unmount(); root = null; SEL = null; MODE = 'cut'; }
+export function destroy() { if (keyHandler) document.removeEventListener('keydown', keyHandler); keyHandler = null; clearTimeout(FR_TIMER); editor.unmount(); const v = document.getElementById('view'); if (v) v.classList.remove('cut-page'); root = null; SEL = null; MODE = 'edit'; }
 
 let MODE = 'edit';   // the studio opens as an editor; the single-cut trimmer is the other tab
 const cutMarkup = () => `<div class="studio">
@@ -39,7 +39,6 @@ const cutMarkup = () => `<div class="studio">
           <input type="file" id="upfile" accept=".png,.mov,.webm"><button class="btn tonal sm" id="upgo">${icon('upload', 's')}Upload</button><div class="msg" id="upmsg"></div></div></details>
       </div></div></div>
     <div class="stack" style="min-width:0">
-      <div class="modes" id="modes"><button data-mode="edit" class="on">${icon('layers', 's')}Timeline editor</button><button data-mode="cut">${icon('cut', 's')}Quick single cut</button><span class="muted body-s" id="modehint">the AI fills the timeline in — drag the clips to rearrange it</span></div>
       <div class="card" id="editor"><div class="bd">${emptyState('layers', 'Pick an analysed video on the left', 'its proposed cuts land on the timeline, and you take it from there')}</div></div>
     </div>
     <div class="card rcol"><div class="hd"><h3>Renders</h3><span class="sp"></span><span class="tag" id="rcount"></span></div><div class="bd" id="renders"><div class="empty">No renders yet.</div></div></div>
@@ -57,6 +56,7 @@ async function mountMode() {
   editor.unmount();
   if (keyHandler) { document.removeEventListener('keydown', keyHandler); keyHandler = null; }
   const modes = $('#modes'); if (modes) modes.hidden = (MODE === 'edit');   // the editor carries its own switch
+  const v = document.getElementById('view'); if (v) v.classList.remove('cut-page');
   if (MODE === 'edit') {
     body.innerHTML = '';
     if (!JOBS.length) { try { JOBS = (await api('/jobs')).filter((j) => j.source.kind !== 'online' && j.source.path); } catch { /* offline */ } }
@@ -66,6 +66,7 @@ async function mountMode() {
     if (JOB) history.replaceState(null, '', '#composer/' + JOB.id);
     return editor.mount(body, { job: JOB, jobs: JOBS, onMode: setMode });
   }
+  const view = document.getElementById('view'); if (view) view.classList.add('cut-page');   // same surface as the editor
   body.innerHTML = cutMarkup();
   JOBSIG = '';
   renderTemplates(); await refreshJobs();
