@@ -266,6 +266,23 @@ Stored per job (`transcripts` table, JSON sidecar without Postgres), served by `
 on "लेकिन" or open it on "तो". A 40 s clip takes ~45 s on the dev Mac; the model downloads once (1.6 GB) to `data/models`.
 Measurement is queued, never inline, so a long video never holds up embeddings or drafts.
 
+## The edit studio (V1.4)
+
+Reels studio has two modes. **Cut one clip** is the single-window trimmer (now with the speech lane). **Edit a timeline**
+is the editor: the AI's proposals from a video land on a track as separate clips, and from there it is ordinary editing.
+
+* **drag a clip to reorder it, drag its edges to trim** (the positions recompute as you go), click it to open the
+  inspector — label, text on screen, ±0.2 s / ±1 s nudges, snap-to-speech, fill/fit, focus, follow-the-speaker, mute;
+* **Add clip** takes a piece of *any* analysed video — pick it from the sentence list of that video's transcript — so one
+  reel can draw on several shoots. Clips from another video are coloured differently on the track;
+* **Play the edit** runs the clips in order in the preview, with a playhead moving along the track;
+* **Render** stitches it through the storyboard renderer (one branded segment per clip) on the composer's queue, and
+  **Export** hands the same edit to Resolve / Premiere as FCPXML / EDL / SRT / JSON.
+
+Everything saves itself (`timelines` table; `POST /api/v1/timelines` to create one from a job's cuts, `PUT` to save,
+`POST …/clips` to add, `POST …/render`, `GET …/export`). Measured: four clips from two different videos, reordered,
+trimmed and one muted → a 43.6 s branded reel rendered in 14.7 s.
+
 ## Editing studio: tracked framing, the timeline, and getting out (V1.3)
 
 In the studio (`/admin#composer`) the measured transcript is drawn as a **speech lane** under the trim bar: one block per

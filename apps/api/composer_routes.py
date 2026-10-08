@@ -517,6 +517,24 @@ def render_poster(ctx: Ctx, render_id: str) -> FileResponse:
     return FileResponse(Path(poster), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
 
+@router.post("/api/v1/jobs/{job_id}/track")
+def track_window(request: Request, ctx: Ctx, job_id: str, cut_in: float, cut_out: float) -> dict:
+    """Follow the speaker across this window and return the crop path - what the editor stores on a clip."""
+    from services.video_composer.tracking import track_faces
+
+    job = _job(request, job_id)
+    src = _local_media(job)
+    if cut_out <= cut_in:
+        raise HTTPException(400, "the out point must be after the in point")
+    try:
+        keys = track_faces(src, cut_in, min(cut_out, cut_in + MAX_RENDER_SECONDS))
+    except Exception as exc:  # noqa: BLE001 - tracking is an improvement, never a failure
+        log.warning("tracking %s failed: %s", job_id, exc)
+        keys = []
+    return {"job_id": job_id, "keys": [k.model_dump() for k in keys], "detector": detector_available(),
+            "note": "the speaker barely moves here - a steady frame looks better" if not keys else ""}
+
+
 def timeline_of(rec: RenderRecord) -> "Timeline":
     """Every render - a single cut or a whole storyboard - described as an editable/exportable timeline."""
     from services.video_composer.timeline import Clip, Timeline

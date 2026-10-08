@@ -39,6 +39,10 @@ class Segment:
     cut_in: float = 0.0
     note: str = ""                     # why it looks like this - surfaced in the render detail
     voice_path: str | None = None
+    focus_x: float = 0.5               # framing, carried from the timeline clip
+    focus_y: float = 0.5
+    track: list[dict] = field(default_factory=list)
+    mute: bool = False
 
 
 @dataclass
@@ -217,7 +221,8 @@ def render_storyboard(board: Storyboard, template: Template, settings: ComposerS
                 info = ff.probe(src)
                 cut_in = max(0.0, min(seg.cut_in, max(0.0, info.duration - seg.seconds)))
                 spec = RenderSpec(job_id=output.stem, source_path=str(src), source_width=info.width, source_height=info.height,
-                                  source_has_audio=info.has_audio, cut_in=cut_in, cut_out=cut_in + seg.seconds)
+                                  source_has_audio=info.has_audio and not seg.mute, cut_in=cut_in, cut_out=cut_in + seg.seconds,
+                                  focus_x=seg.focus_x, focus_y=seg.focus_y, track=list(seg.track or []))
             else:
                 base = work / f"base_{seg.n:03d}.mp4"
                 if seg.kind == "still" and seg.source_path and Path(seg.source_path).is_file():

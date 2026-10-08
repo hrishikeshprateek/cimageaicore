@@ -1,5 +1,6 @@
 // Reels studio: pick an analysed local video, choose a cut, frame it, caption it, render branded shorts.
 import { api, post, del, esc, attr, icon, ts, r1, toast, confirmDialog, emptyState } from '../core.js';
+import * as editor from './editor.js';
 
 export const title = 'Reels studio';
 export const subtitle = 'analysed video → proposed cut → branded short';
@@ -28,17 +29,30 @@ export async function render(el, params, c) {
           <label class="check"><input type="checkbox" id="upreplace" checked> replace all existing layers of this preset</label>
           <input type="file" id="upfile" accept=".png,.mov,.webm"><button class="btn tonal sm" id="upgo">${icon('upload', 's')}Upload</button><div class="msg" id="upmsg"></div></div></details>
       </div></div></div>
-    <div class="card" id="editor"><div class="bd">${emptyState('cut', 'Pick an analysed video with a local file', 'YouTube-sourced videos have no file to cut')}</div></div>
+    <div class="stack" style="min-width:0">
+      <div class="modes" id="modes"><button class="on" data-mode="cut">${icon('cut', 's')}Cut one clip</button><button data-mode="edit">${icon('layers', 's')}Edit a timeline</button><span class="muted body-s">the AI fills the timeline in — you rearrange it</span></div>
+      <div class="card" id="editor"><div class="bd">${emptyState('cut', 'Pick an analysed video with a local file', 'YouTube-sourced videos have no file to cut')}</div></div>
+    </div>
     <div class="card rcol"><div class="hd"><h3>Renders</h3><span class="sp"></span><span class="tag" id="rcount"></span></div><div class="bd" id="renders"><div class="empty">No renders yet.</div></div></div>
   </div>`;
   renderTemplates(); await refreshJobs();
+  $$('#modes button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
   $$('#presets .chip').forEach((l) => l.onclick = (e) => { e.preventDefault(); const cb = l.querySelector('input'); cb.checked = !cb.checked; l.classList.toggle('on', cb.checked); previewTemplate(); syncRenderButton(); if (SEL) scheduleFraming(false, 0); });
   $('#upgo').onclick = uploadLayer;
   keyHandler = onKey; document.addEventListener('keydown', keyHandler);
   const want = params[0]; if (want && JOBS.find((j) => j.id === want)) select(want); else if (want) toast('That video has no local file to cut', true);
 }
-export async function tick() { if (!root || !SYSTEM || !SYSTEM.enabled) return; await refreshJobs(); await refreshRenders(false); }
-export function destroy() { if (keyHandler) document.removeEventListener('keydown', keyHandler); keyHandler = null; clearTimeout(FR_TIMER); root = null; SEL = null; }
+export async function tick() { if (!root || !SYSTEM || !SYSTEM.enabled || MODE === 'edit') return; await refreshJobs(); await refreshRenders(false); }
+export function destroy() { if (keyHandler) document.removeEventListener('keydown', keyHandler); keyHandler = null; clearTimeout(FR_TIMER); editor.unmount(); root = null; SEL = null; MODE = 'cut'; }
+
+let MODE = 'cut';
+function setMode(m) {
+  if (MODE === m) return;
+  MODE = m;
+  $$('#modes button').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
+  if (m === 'edit') { editor.unmount(); if (JOB) editor.mount($('#editor'), { job: JOB, jobs: JOBS, template: TPL, preset: selectedPresets()[0] || 'reels' }); else $('#editor').innerHTML = `<div class="bd">${emptyState('cut', 'Pick a video first', 'the edit starts from one video; you can add clips from others')}</div>`; }
+  else { editor.unmount(); if (SEL) { const keep = SEL; SEL = null; select(keep); } }
+}
 
 const selectedPresets = () => $$('#presets input:checked').map((c) => c.value);
 function renderTemplates() { const sel = $('#tpl'); sel.innerHTML = (SYSTEM.templates || []).map((t) => `<option value="${attr(t.name)}" ${t.name === TPL ? 'selected' : ''}>${esc(t.name)}${t.error ? ' (broken)' : ''}${t.missing_files && t.missing_files.length ? ' (missing files)' : ''}</option>`).join(''); sel.onchange = () => { TPL = sel.value; previewTemplate(); syncRenderButton(); if (SEL) scheduleFraming(false, 0); }; previewTemplate(); }
@@ -55,7 +69,9 @@ async function refreshJobs() {
   el.querySelectorAll('.li.clickable').forEach((n) => n.onclick = () => select(n.dataset.id));
 }
 async function select(id) {
-  if (id === SEL) return; SEL = id; JOB = JOBS.find((x) => x.id === id); CUTS = null; CUT = null; JOBSIG = ''; history.replaceState(null, '', '#composer/' + id); await refreshJobs(); mountEditor();
+  if (id === SEL) return; SEL = id; JOB = JOBS.find((x) => x.id === id); CUTS = null; CUT = null; JOBSIG = ''; history.replaceState(null, '', '#composer/' + id); await refreshJobs();
+  if (MODE === 'edit') { editor.unmount(); return editor.mount($('#editor'), { job: JOB, jobs: JOBS, template: TPL, preset: selectedPresets()[0] || 'reels' }); }
+  mountEditor();
   try { CUTS = await api('/jobs/' + id + '/cuts'); DUR = CUTS.duration_seconds || JOB.source.duration_seconds || 0; } catch (e) { $('#cuts').innerHTML = `<div class="banner err">${icon('warn')}<div>${esc(e.message)}</div></div>`; return; }
   if (CUTS.cuts.length) loadCut(CUTS.cuts[0]); else ED = { ...blankEd(), cut_out: Math.min(30, DUR || 30) };
   renderCuts(); syncTrim(); syncFields(); renderCues(); scheduleFraming(true, 0); await refreshRenders(true);
@@ -279,7 +295,7 @@ async function refreshRenders(force) {
 
 // ---------------------------------------------------------------- keyboard + template upload
 function onKey(e) {
-  if (!SEL || !root || e.target.matches('input,textarea,select')) return; const v = $('#src'); if (!v) return;
+  if (!SEL || !root || MODE === 'edit' || (e.target && e.target.matches && e.target.matches('input,textarea,select'))) return; const v = $('#src'); if (!v) return;
   if (e.key === 'i' || e.key === 'I') { setIn(v.currentTime); toast('IN = ' + ts(ED.cut_in)); } else if (e.key === 'o' || e.key === 'O') { setOut(v.currentTime); toast('OUT = ' + ts(ED.cut_out)); }
   else if (e.key === ' ') { e.preventDefault(); v.paused ? v.play() : v.pause(); } else if (e.key === 'l' || e.key === 'L') toggleLoop();
   else if (e.key === 'ArrowLeft') { e.preventDefault(); v.currentTime = Math.max(0, v.currentTime - 0.2); } else if (e.key === 'ArrowRight') { e.preventDefault(); v.currentTime = v.currentTime + 0.2; }

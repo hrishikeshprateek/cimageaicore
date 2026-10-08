@@ -29,12 +29,14 @@ from services.prompts.registry import PromptRegistry
 from apps.api.prompt_routes import router as prompt_router
 from apps.api.script_routes import router as script_router
 from apps.api.transcribe_routes import router as transcribe_router, transcribe_job
+from apps.api.timeline_routes import router as timeline_router
 from services.retrieval.retriever import Retriever
 from agents.blog_agent.agent import BlogAgent
 from agents.script_agent.agent import ScriptAgent
 from services.tts import build_tts
 from services.transcribe import build_transcriber
 from apps.api.transcript_store import build_transcript_store
+from apps.api.timeline_store import build_timeline_store
 
 WEB_DIR = REPO_ROOT / "web"
 
@@ -105,6 +107,7 @@ async def lifespan(app: FastAPI):
     app.state.tts = build_tts(settings)
     app.state.transcriber = build_transcriber(settings)
     app.state.transcripts = build_transcript_store(store, settings.transcripts_dir)
+    app.state.timelines = build_timeline_store(store, settings.data_dir / "timelines")
     app.state.watcher = _build_watcher(app, settings)
     app.state.watcher.start()
     log.info("provider=%s model=%s embedder=%s/%s store=%s jobs_loaded=%d data_dir=%s watcher=%s auto_draft=%s asr=%s", provider.name, provider.model,
@@ -170,6 +173,7 @@ def create_app() -> FastAPI:
     app.include_router(prompt_router)
     app.include_router(script_router)
     app.include_router(transcribe_router)
+    app.include_router(timeline_router)
 
     @app.get("/health", include_in_schema=False)
     def health() -> dict:
