@@ -51,6 +51,9 @@ class ProxyPolicy:
     audio_kbps: int = 96
     keep: bool = False
     timeout_seconds: int = 7200
+    # If one pass is still too big for the upload limit (a very long recording), step down and try again.
+    ladder: tuple[tuple[int, int], ...] = ((480, 32), (360, 34), (270, 36))
+    target_bytes: int = GEMINI_MAX_UPLOAD_BYTES - 64 * 1024 ** 2    # leave headroom under the hard limit
 
 
 def probe(path: Path) -> MediaProbe:
@@ -100,21 +103,46 @@ def proxy_reason(info: MediaProbe, policy: ProxyPolicy) -> str | None:
     return None
 
 
-def make_proxy(src: Path, out: Path, policy: ProxyPolicy, *, info: MediaProbe | None = None) -> Path:
-    """Transcode `src` to a small H.264/AAC MP4 at `out` (max `policy.max_height` tall, CRF `policy.crf`)."""
-    if FFMPEG is None:
-        raise ProxyError("ffmpeg not found on PATH")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".part.mp4")
-    scale = f"scale=-2:'min({policy.max_height},ih)'"
-    cmd = [FFMPEG, "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a?", "-vf", scale,
-           "-c:v", "libx264", "-preset", policy.preset, "-crf", str(policy.crf), "-pix_fmt", "yuv420p", "-profile:v", "high",
-           "-c:a", "aac", "-b:a", f"{policy.audio_kbps}k", "-ac", "2", "-movflags", "+faststart", str(tmp)]
-    started = time.monotonic()
+def _encode(src: Path, tmp: Path, policy: ProxyPolicy, height: int, crf: int, audio_kbps: int) -> None:
+    cmd = [FFMPEG, "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a?",
+           "-vf", f"scale=-2:'min({height},ih)'",
+           "-c:v", "libx264", "-preset", policy.preset, "-crf", str(crf), "-pix_fmt", "yuv420p", "-profile:v", "high",
+           "-c:a", "aac", "-b:a", f"{audio_kbps}k", "-ac", "2", "-movflags", "+faststart", str(tmp)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=policy.timeout_seconds, check=False)
     if proc.returncode != 0 or not tmp.exists():
         tmp.unlink(missing_ok=True)
         raise ProxyError(f"ffmpeg proxy failed for {src.name}: {proc.stderr.strip()[-400:]}")
-    tmp.replace(out)
-    log.info("proxy %s -> %s (%.0f MB -> %.0f MB) in %.0fs", src.name, out.name, (info.size_bytes if info else src.stat().st_size) / 1e6, out.stat().st_size / 1e6, time.monotonic() - started)
-    return out
+
+
+def make_proxy(src: Path, out: Path, policy: ProxyPolicy, *, info: MediaProbe | None = None,
+               on_step=None) -> Path:
+    """Transcode `src` to a small H.264/AAC MP4 at `out`, stepping the quality down until it fits the upload limit.
+
+    A 15 GB camera master becomes a few hundred MB at 720p/CRF 28 - but a three-hour recording can still land over the
+    2 GB the File API accepts, so the ladder retries at 480p, 360p and 270p rather than failing the job. The original is
+    never touched: reels are still cut from it."""
+    if FFMPEG is None:
+        raise ProxyError("ffmpeg not found on PATH")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".part.mp4")
+    source_bytes = info.size_bytes if info else src.stat().st_size
+    started = time.monotonic()
+    attempts = [(policy.max_height, policy.crf, policy.audio_kbps), *[(h, c, min(policy.audio_kbps, 64)) for h, c in policy.ladder]]
+    last = None
+    for n, (height, crf, audio) in enumerate(attempts, start=1):
+        if on_step:
+            on_step({"attempt": n, "of": len(attempts), "height": height, "crf": crf})
+        _encode(src, tmp, policy, height, crf, audio)
+        size = tmp.stat().st_size
+        last = (height, crf, size)
+        if size <= policy.target_bytes or n == len(attempts):
+            tmp.replace(out)
+            log.info("proxy %s -> %s (%.0f MB -> %.0f MB, %dp crf %d) in %.0fs", src.name, out.name,
+                     source_bytes / 1e6, size / 1e6, height, crf, time.monotonic() - started)
+            if size > GEMINI_MAX_UPLOAD_BYTES:
+                raise ProxyError(f"even at {height}p the copy is {size / 1024 ** 3:.1f} GB - this recording is too long to analyse in one piece; "
+                                 "split it and analyse the parts")
+            return out
+        log.info("proxy %s at %dp/crf %d is %.0f MB - stepping down", src.name, height, crf, size / 1e6)
+        tmp.unlink(missing_ok=True)
+    raise ProxyError(f"could not shrink {src.name} below the upload limit (last attempt {last})")

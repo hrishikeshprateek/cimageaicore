@@ -35,30 +35,75 @@ function drawList() {
 }
 
 export function analyseDialog() {
-  let file = null;
-  const d = openDialog(`<div class="dhd"><h3>Analyse a video</h3><p>Upload a file, paste a YouTube link, or point at a file under the allowed NAS roots.</p></div>
-    <div class="dbd"><div class="drop" id="drop"><b>Drop a video here</b>or click to choose a file<input type="file" id="file" accept="video/*" hidden></div>
-    <div class="field"><label>YouTube URL (public)</label><input type="url" id="url" placeholder="https://www.youtube.com/watch?v=…"></div>
-    <div class="field"><label>NAS / local path</label><input type="text" id="path" placeholder="/mnt/nas/AI-Test/Convocation_2026.mp4"></div>
-    <div class="msg" id="msg">YouTube sources are analysed without downloading — they can't be cut into reels.</div></div>
+  let file = null, picked = null, cap = 20480;
+  const d = openDialog(`<div class="dhd"><h3>Analyse a video</h3><p>Big camera masters are best left where they are — pick the file and the server reads it in place. Only a small copy ever goes to the AI.</p></div>
+    <div class="dbd">
+      <div class="drop" id="drop"><b>Drop a video here</b>or click to choose a file<input type="file" id="file" accept="video/*" hidden></div>
+      <div class="row" style="gap:8px"><button class="btn tonal" id="pickbtn">${icon('folder', 's')}Pick a file on this machine</button><span class="muted body-s" id="pickedlbl">nothing picked</span></div>
+      <div class="field"><label>or a YouTube URL (public)</label><input type="url" id="url" placeholder="https://www.youtube.com/watch?v=…"></div>
+      <div class="msg" id="msg"></div></div>
     <div class="dft"><button class="btn" data-close>Cancel</button><button class="btn filled" id="go">${icon('bolt')}Analyse</button></div>`, {
     onOpen(dlg) {
       const drop = dlg.querySelector('#drop'), fin = dlg.querySelector('#file'), msg = dlg.querySelector('#msg');
-      const setFile = (f) => { file = f || null; drop.querySelector('b').textContent = f ? `${f.name} (${bytes(f.size)})` : 'Drop a video here'; };
+      api('/system').then((sys) => { cap = sys.max_upload_mb || cap; hint(); }).catch(() => hint());
+      function hint() {
+        msg.className = 'msg';
+        msg.innerHTML = `Anything over ~400 MB is shrunk to a 720p copy for the AI (the original stays for cutting reels). Uploads are capped at ${(cap / 1024).toFixed(0)} GB — above that, pick the file instead. YouTube links are analysed without downloading and can't be cut.`;
+      }
+      const setFile = (f) => {
+        file = f || null; picked = null;
+        dlg.querySelector('#pickedlbl').textContent = 'nothing picked';
+        drop.querySelector('b').textContent = f ? `${f.name} (${bytes(f.size)})` : 'Drop a video here';
+        if (f && f.size > cap * 1024 * 1024) { msg.className = 'msg err'; msg.textContent = `${bytes(f.size)} is over the ${(cap / 1024).toFixed(0)} GB upload limit — use “Pick a file on this machine” instead; nothing is copied and the AI still only sees a small version.`; }
+        else hint();
+      };
       drop.onclick = () => fin.click(); fin.onchange = () => setFile(fin.files[0]);
       ['dragenter', 'dragover'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add('over'); }));
       ['dragleave', 'drop'].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.remove('over'); }));
       drop.addEventListener('drop', (ev) => setFile(ev.dataTransfer.files[0]));
+      dlg.querySelector('#pickbtn').onclick = () => pickVideoDialog((p) => {
+        picked = p; file = null; fin.value = '';
+        drop.querySelector('b').textContent = 'Drop a video here';
+        dlg.querySelector('#pickedlbl').innerHTML = `<span class="mono">${esc(p.split('/').slice(-1)[0])}</span>`;
+        dlg.querySelector('#pickedlbl').title = p;
+        hint();
+      });
       dlg.querySelector('#go').onclick = async () => {
-        const fd = new FormData(); const url = dlg.querySelector('#url').value.trim(), path = dlg.querySelector('#path').value.trim();
-        if (file) fd.append('file', file); else if (url) fd.append('url', url); else if (path) fd.append('path', path); else { msg.textContent = 'Choose a file, or enter a URL or path.'; msg.className = 'msg err'; return; }
-        const go = dlg.querySelector('#go'); go.disabled = true; msg.textContent = file ? 'Uploading…' : 'Submitting…'; msg.className = 'msg';
-        try { const r = await upload('/analyze', fd); toast(r.deduplicated ? 'Already analysed — opening it' : 'Queued for analysis'); dlg.close(); location.hash = 'videos/' + r.job_id; }
+        const fd = new FormData(); const url = dlg.querySelector('#url').value.trim();
+        if (file) fd.append('file', file);
+        else if (picked) fd.append('path', picked);
+        else if (url) fd.append('url', url);
+        else { msg.textContent = 'Choose a file, pick one on this machine, or paste a URL.'; msg.className = 'msg err'; return; }
+        const go = dlg.querySelector('#go'); go.disabled = true;
+        msg.className = 'msg'; msg.textContent = file ? `Uploading ${bytes(file.size)}…` : 'Submitting…';
+        try { const r = await upload('/analyze', fd); toast(r.deduplicated ? 'Already analysed — opening it' : 'Queued for analysis'); d.close(); location.hash = 'videos/' + r.job_id; }
         catch (e) { msg.textContent = e.message; msg.className = 'msg err'; go.disabled = false; }
       };
     },
   });
   return d;
+}
+
+/** Browse the machine and choose one video file - the route a 15 GB master should take. */
+function pickVideoDialog(onPick) {
+  let cur = null, data = null, dlg = null;   // onOpen runs before openDialog returns, so the dialog arrives as an argument
+  dlg = openDialog(`<div class="dhd"><h3>Pick a video on this machine</h3><p>Nothing is copied: the server reads the file where it sits and sends the AI a small copy.</p></div>
+    <div class="dbd"><div class="row" style="gap:6px"><button class="btn xs" id="pkUp" title="up one level">${icon('chevron', 's')}</button><span class="mono grow" id="pkPath" style="word-break:break-all">…</span></div>
+      <div class="list" id="pkList" style="max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:8px"><div class="loading"><span class="spin"></span></div></div>
+      <div class="msg" id="pkMsg"></div></div>
+    <div class="dft"><button class="btn" data-close>Cancel</button></div>`, { onOpen(x) { dlg = x; x.querySelector('#pkUp').onclick = () => load(data && data.parent ? data.parent : null); load(null); } });
+  async function load(path) {
+    const list = dlg.querySelector('#pkList'); list.innerHTML = '<div class="loading"><span class="spin"></span></div>';
+    try { data = await api('/nas/browse' + (path ? '?path=' + encodeURIComponent(path) : '')); }
+    catch (e) { list.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    cur = data.path; dlg.querySelector('#pkPath').textContent = cur || 'Locations';
+    dlg.querySelector('#pkUp').disabled = !data.parent && !cur;
+    const folders = (data.folders || []).map((f) => `<div class="li clickable" data-p="${attr(f.path)}"><div class="avatar">${icon('folder')}</div><div class="grow"><div class="t">${esc(data.places ? f.name : f.name)}</div><div class="d">${f.videos ? f.videos + ' video' + (f.videos === 1 ? '' : 's') : 'no videos directly inside'}</div></div>${icon('chevron')}</div>`).join('');
+    const files = (data.videos || []).map((v) => `<div class="li clickable pickfile" data-f="${attr(v.path || ((cur || '') + '/' + v.name))}"><div class="avatar">${icon('video')}</div><div class="grow"><div class="t">${esc(v.name)}</div><div class="d">${bytes(v.size)}</div></div><span class="btn xs tonal">use this</span></div>`).join('');
+    list.innerHTML = folders + files || '<div class="empty">nothing here</div>';
+    list.querySelectorAll('.li.clickable:not(.pickfile)').forEach((n) => n.onclick = () => load(n.dataset.p));
+    list.querySelectorAll('.pickfile').forEach((n) => n.onclick = () => { onPick(n.dataset.f); dlg.close(); });
+  }
 }
 
 // ---------------------------------------------------------------- detail

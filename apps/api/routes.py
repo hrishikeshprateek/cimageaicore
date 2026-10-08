@@ -57,7 +57,7 @@ async def analyze(
     s = request.app.state.settings
     try:
         if file is not None:
-            source = await _save_upload(file, s.uploads_dir, s.max_upload_mb)
+            source = await _save_upload(file, s.uploads_dir, s.max_upload_mb, s.upload_free_mb)
         elif path:
             allowed = s.allowed_roots + list(getattr(getattr(request.app.state, "watcher", None), "roots", []))   # + folders picked in the admin UI
             source = sources.from_path(path, allowed, s.stable_seconds)
@@ -136,22 +136,29 @@ def _job_or_404(request: Request, job_id: str) -> Job:
     return job
 
 
-async def _save_upload(file: UploadFile, uploads_dir: Path, max_mb: int) -> sources.VideoSource:
+async def _save_upload(file: UploadFile, uploads_dir: Path, max_mb: int, free_mb: int = 2048) -> sources.VideoSource:
     name = sources.safe_filename(file.filename or "video.mp4")
     if Path(name).suffix.lower() not in sources.VIDEO_EXTENSIONS:
         raise sources.SourceError(f"unsupported file type '{Path(name).suffix}'")
+    import shutil
     import uuid
 
     dest = uploads_dir / f"{uuid.uuid4().hex[:8]}_{name}"
     limit = max_mb * 1024 * 1024
+    floor = free_mb * 1024 * 1024
     written = 0
     with dest.open("wb") as out:
         while chunk := await file.read(CHUNK):
             written += len(chunk)
             if written > limit:
-                out.close()
-                dest.unlink(missing_ok=True)
-                raise sources.SourceError(f"upload exceeds MAX_UPLOAD_MB={max_mb}")
+                out.close(); dest.unlink(missing_ok=True)
+                raise sources.SourceError(
+                    f"this file is over the {max_mb / 1024:.0f} GB upload limit. Raise MAX_UPLOAD_MB, or - better for a big "
+                    "camera master - leave it where it is and analyse it by path (Analyse a video → Pick a file), or drop it "
+                    "in the watched folder. Either way only a small copy is sent to the AI.")
+            if written % (256 * 1024 * 1024) < CHUNK and shutil.disk_usage(uploads_dir).free < floor:
+                out.close(); dest.unlink(missing_ok=True)
+                raise sources.SourceError("the disk is nearly full - free some space, or analyse the file by path instead of uploading it")
             out.write(chunk)
     try:
         return sources.from_upload(dest)

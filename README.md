@@ -106,27 +106,26 @@ custom versions go to `data/prompts/…` on the data volume), switch the active 
 context; changes apply live via `services/prompts/registry.py` (the engine and the writer reload their templates).
 `.env` values (`PROMPT_VERSION`, `BLOG_PROMPT_VERSION`, …) remain the defaults; `data/prompt_config.json` holds overrides.
 
-## Upload proxies (raw camera files)
+## Big files: upload proxies and analysing in place
 
-Gemini charges per **second** of video (~1 frame/s sampled + audio), never per byte — a 21 GB ProRes master and a 200 MB
-H.264 of the same ten minutes cost the same. Bytes only hurt: the File API refuses anything over 2 GB, and a 21 GB upload
-takes ~15 min on 200 Mbps. So `services/block_engine/proxy.py` probes every local source before upload and, when it is
-≥ `PROXY_MIN_MB` (400), above `PROXY_MAX_BITRATE_KBPS` (6 Mbps) or over the 2 GB limit, transcodes it to a
-`PROXY_MAX_HEIGHT` (720p) H.264 / AAC proxy at CRF 28 — typically 50–200× smaller — and uploads that instead. The job
-shows a `TRANSCODING` stage with the reason, sizes, ratio and seconds. The original never moves (the Reels studio cuts
-from it); the proxy is deleted after analysis unless `PROXY_KEEP=true`. Phone/H.264 exports under the thresholds go as-is.
+Gemini's File API refuses anything over 2 GB, and a 15 GB camera master is miserable to push through a browser anyway.
+Two things handle it:
 
+**Analyse it where it is.** *Videos → Analyse a video → Pick a file on this machine* browses the whole filesystem (the
+same picker as the folder watcher) and submits a **path**: nothing is copied, nothing is uploaded, and the file can be
+any size. This is the right route for raw footage on the NAS or a local drive.
 
-`gemini-embedding-2` at 768 dimensions (documents as `title: … | text: …`, queries as `task: search result | query: …`),
-stored in `knowledge_blocks.embedding` with an HNSW cosine index. Free tier: 100 RPM / 1K RPD; paid $0.20 per 1M tokens
-(a whole video's blocks ≈ 2–5k tokens).
+**The proxy.** Before anything goes to the model, a source that is ≥ 400 MB, over 6 Mbps or over 2 GB is transcoded to a
+720p H.264 CRF 28 copy (`services/block_engine/proxy.py`). Cost depends on the *duration* of the video, not its bytes -
+the model samples ~1 fps and downsizes frames anyway - so the proxy loses nothing the analysis would have seen. The
+original is never touched: reels are still cut from it. If one pass is still too big (a three-hour recording), the
+**ladder steps down** - 480p/CRF 32, then 360p, then 270p - until the copy fits, and only an unshrinkable recording
+fails, with an error that says to split it. Each attempt appears in the job timeline as a `TRANSCODING` stage, so a long
+transcode is visible rather than silent.
 
-**Local alternative (default in docker-compose, `EMBEDDING_PROVIDER=ollama`)**: Google's EmbeddingGemma-300M served by
-Ollama — same 768 dims and the same prompt formats, 100+ languages, ~25 ms per query on CPU, ₹0 and no internet needed for
-search. `ollama pull embeddinggemma` once. The store records `embedding_model` per block; switching providers marks the
-other model's vectors stale, `scripts/embed_backfill.py` re-embeds them (130 blocks ≈ 3 s), and vector search only
-matches blocks embedded by the current model, so a half-migrated index never returns nonsense. Cross-lingual: Hindi queries find English blocks. YouTube URLs are canonicalised
-to `watch?v=<id>` (playlist/radio parameters make Gemini return 403).
+Uploads through the browser stream straight to disk and are capped by `MAX_UPLOAD_MB` (20 GB by default, was 2 GB); the
+endpoint also refuses to fill the disk (`UPLOAD_FREE_MB`), and the dialog tells you the cap and offers the picker
+instead when a chosen file is over it.
 
 ## Blog Agent (V0.5)
 

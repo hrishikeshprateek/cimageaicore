@@ -51,7 +51,8 @@ class Settings(BaseSettings):
     data_dir: Path = REPO_ROOT / "data"
     nas_allowed_roots: str = "./data/nas-test"
     stable_seconds: float = 2.0
-    max_upload_mb: int = 2048
+    max_upload_mb: int = 20480        # 20 GB: uploads stream straight to disk, and anything big is shrunk before the AI sees it
+    upload_free_mb: int = 2048        # refuse an upload that would leave the disk with less than this
     worker_threads: int = 2
 
     institution_context: str = (

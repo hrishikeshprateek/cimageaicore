@@ -97,6 +97,8 @@ def browse(request: Request, path: str | None = None) -> dict[str, Any]:
     if not p.is_dir():
         raise HTTPException(404, f"folder not found: {p}")
     out = list_dir(p)
+    for v in out.get("videos", []):
+        v["path"] = str(Path(out["path"]) / v["name"])      # the picker submits a path, not a name
     if p.resolve() == ANYWHERE or not is_browsable(Path(out.get("parent") or p), bases):
         out["parent"] = None   # stop at the top of the place (or at / when browsing anywhere)
     out["places"] = False

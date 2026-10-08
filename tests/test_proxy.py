@@ -67,7 +67,9 @@ def test_engine_uploads_a_proxy_only_when_the_policy_says_so(tmp_path: Path):
     sent = prov.inputs[0]
     assert sent.path != src.path and sent.path.parent == tmp_path / "proxies" and sent.mime_type == "video/mp4" and sent.name == "Convocation_master.mp4"
     tr = [d for st, d in stages if st == "TRANSCODING"]
-    assert len(tr) == 2 and "reason" in tr[0] and tr[1]["done"] is True and tr[1]["ratio"] >= 1
+    # start · one stage per encoding attempt (so a long transcode is visible) · done
+    assert len(tr) >= 3 and "reason" in tr[0] and tr[1]["attempt"] == 1 and tr[1]["height"] == 360
+    assert tr[-1]["done"] is True and tr[-1]["ratio"] >= 1
     assert not sent.path.exists()                                       # cleaned up (PROXY_KEEP=false)
     # policy: thresholds above this clip's size/bitrate -> sent untouched, no TRANSCODING stage
     info = probe(src.path); prov2, stages2 = _Recording(), []
@@ -81,3 +83,36 @@ def test_engine_uploads_a_proxy_only_when_the_policy_says_so(tmp_path: Path):
     prov4, stages4 = MockProvider(delay_seconds=0), []
     BlockEngine(prov4, institution_context="Test", proxy=ProxyPolicy(min_mb=0), proxies_dir=tmp_path / "proxies").analyze("job4", src, lambda st, d: stages4.append(st))
     assert "TRANSCODING" not in stages4
+
+
+def test_the_ladder_steps_down_until_the_copy_fits(tiny_video: Path, tmp_path: Path, monkeypatch):
+    """A long recording can still be over the upload limit at 720p; the proxy retries smaller rather than failing."""
+    from services.block_engine import proxy as mod
+
+    sizes = iter([5_000_000_000, 3_000_000_000, 1_000_000_000])   # 720p too big, 480p too big, 360p fits
+    tried: list[tuple[int, int]] = []
+
+    def fake_encode(src, tmp, policy, height, crf, audio):
+        tried.append((height, crf))
+        tmp.write_bytes(b"x")
+        size = next(sizes)
+        monkeypatch.setattr(mod.Path, "stat", lambda self, _s=size: type("S", (), {"st_size": _s})(), raising=False)
+
+    monkeypatch.setattr(mod, "_encode", fake_encode)
+    steps: list[dict] = []
+    out = mod.make_proxy(tiny_video, tmp_path / "p.mp4", mod.ProxyPolicy(), on_step=steps.append)
+    assert [h for h, _ in tried] == [720, 480, 360]            # stepped down twice, then accepted
+    assert [s["height"] for s in steps] == [720, 480, 360] and steps[0]["of"] == 4
+    assert out.name == "p.mp4"
+
+
+def test_a_recording_that_cannot_be_shrunk_says_so(tiny_video: Path, tmp_path: Path, monkeypatch):
+    from services.block_engine import proxy as mod
+
+    def fake_encode(src, tmp, policy, height, crf, audio):
+        tmp.write_bytes(b"x")
+        monkeypatch.setattr(mod.Path, "stat", lambda self: type("S", (), {"st_size": 9_000_000_000})(), raising=False)
+
+    monkeypatch.setattr(mod, "_encode", fake_encode)
+    with pytest.raises(mod.ProxyError, match="too long to analyse in one piece"):
+        mod.make_proxy(tiny_video, tmp_path / "p.mp4", mod.ProxyPolicy())

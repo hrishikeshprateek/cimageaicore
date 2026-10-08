@@ -120,7 +120,9 @@ class BlockEngine:
                                  "target": f"{policy.max_height}p H.264 crf {policy.crf}"})
         t0 = time.monotonic()
         if not out.exists():
-            make_proxy(source.path, out, policy, info=info)
+            make_proxy(source.path, out, policy, info=info,
+                       on_step=lambda d: on_stage("TRANSCODING", {**d, "source_bytes": info.size_bytes,
+                                                                  "note": f"shrinking to {d['height']}p (pass {d['attempt']} of {d['of']})"}))
         size = out.stat().st_size
         on_stage("TRANSCODING", {"done": True, "proxy_bytes": size, "ratio": round(info.size_bytes / max(size, 1), 1), "seconds": round(time.monotonic() - t0, 1), "proxy": str(out)})
         return VideoInput(name=source.info.name, path=out, url=None, mime_type="video/mp4"), out
