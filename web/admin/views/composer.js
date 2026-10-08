@@ -56,6 +56,7 @@ async function mountMode() {
   const hint = $('#modehint'); if (hint) hint.textContent = MODE === 'edit' ? 'the AI fills the timeline in — drag the clips to rearrange it' : 'one window of one video, trimmed by hand';
   editor.unmount();
   if (keyHandler) { document.removeEventListener('keydown', keyHandler); keyHandler = null; }
+  const modes = $('#modes'); if (modes) modes.hidden = (MODE === 'edit');   // the editor carries its own switch
   if (MODE === 'edit') {
     body.innerHTML = '';
     if (!JOBS.length) { try { JOBS = (await api('/jobs')).filter((j) => j.source.kind !== 'online' && j.source.path); } catch { /* offline */ } }
@@ -63,7 +64,7 @@ async function mountMode() {
     JOB = JOBS.find((j) => j.id === (WANT || SEL)) || JOB || usable[0] || JOBS[0] || null;
     SEL = JOB ? JOB.id : null;
     if (JOB) history.replaceState(null, '', '#composer/' + JOB.id);
-    return editor.mount(body, { job: JOB, jobs: JOBS });
+    return editor.mount(body, { job: JOB, jobs: JOBS, onMode: setMode });
   }
   body.innerHTML = cutMarkup();
   JOBSIG = '';

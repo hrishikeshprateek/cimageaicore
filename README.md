@@ -284,9 +284,14 @@ is ordinary editing.
 * **Inspector**: label, text on screen, ±0.2 s/±1 s nudges, snap-to-sentence, Auto/Fill/Fit, focus, follow-the-speaker
   (face tracking for that clip), mute.
 * **Render** stitches it through the storyboard renderer; **Export** hands the same edit to Resolve or Premiere.
-* The monitor frames the real output shape (9:16 / 1:1 / 16:9), clips on the track are **filmstrips** of their own first
-  frame with the source badged on footage borrowed from another video, and the whole page fits the window - panels
-  scroll inside themselves, nothing pushes the timeline off screen.
+* The monitor frames the real output shape (9:16 / 1:1 / 16:9) and is sized to its stage by a ResizeObserver, so it fits
+  whatever room it has; clips on the track are **filmstrips** of their own frame with the source badged when the footage
+  is borrowed from another video.
+* It fits the window at any size: one bar instead of stacked chrome, side panes that shrink (`clamp(216px,17vw,286px)`)
+  and fold away behind their toolbar buttons below 1180 px, a timeline whose height follows the viewport
+  (`clamp(168px,23vh,258px)`), and `min-width:0` down the whole chain so the toolbar's content can never stretch the
+  page. Measured at 1680/1440/1280/1100/960: no page scroll and nothing overflowing at any of them.
+* While the studio is open the app frame goes dark with it, so there is no light rail around a dark editor.
 
 It saves itself as you work (`timelines` table). API: `POST/GET/PUT/DELETE /api/v1/timelines`, `POST …/clips`,
 `POST …/render`, `GET …/export`, plus `POST /api/v1/jobs/{id}/track` for one clip's crop path. Measured: four clips from

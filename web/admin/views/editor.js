@@ -2,8 +2,8 @@
 // timeline along the bottom. The AI fills the timeline in; everything after that is ordinary editing.
 import { api, post, put, del, esc, attr, icon, ts, toast, confirmDialog, emptyState } from '../core.js';
 
-let host = null, TL = null, JOBS = [], JOB = null, SEL = null, SRC = null;       // SRC: the video open in the sources panel
-let PX = 24, HEAD = 0, PLAYING = false, TIMER = null, SAVE_T = null, POLL = null, dirty = false, SNAP = true, keys = null;
+let host = null, TL = null, JOBS = [], JOB = null, SEL = null, SRC = null, SWITCH = null;       // SRC: the video open in the sources panel
+let PX = 24, HEAD = 0, PLAYING = false, TIMER = null, SAVE_T = null, POLL = null, dirty = false, SNAP = true, keys = null, RESIZE = null, RESIZE_T = null, RO = null;
 const $ = (s) => host && host.querySelector(s);
 const $$ = (s) => host ? [...host.querySelectorAll(s)] : [];
 const clip = (id) => (TL ? TL.clips.find((c) => c.id === id) : null);
@@ -14,7 +14,8 @@ const clipAt = (t) => { const st = starts(); for (let i = TL.clips.length - 1; i
 
 const page = () => document.getElementById('view');
 
-export async function mount(el, { job, jobs }) {
+export async function mount(el, { job, jobs, onMode }) {
+  SWITCH = onMode || null;
   if (page()) page().classList.add('studio-page');
   host = el; JOB = job; JOBS = (jobs || []).filter((j) => j.source && j.source.path); SRC = job ? job.id : (JOBS[0] || {}).id;
   SEL = null; HEAD = 0;
@@ -31,11 +32,19 @@ export async function mount(el, { job, jobs }) {
   }
   draw(); fitZoom(); bindKeys(); pollRenders();
   if (TL.clips.length) { SEL = TL.clips[0].id; drawTimeline(); drawInspector(); }   // open on the first clip, with a picture on the monitor
-  seek(0);
+  seek(0); fitFrame();
+  // the stage is the authority on how big the monitor may be, and it changes when a panel folds or the window moves
+  const stage = host.querySelector('.stage');
+  if (stage && window.ResizeObserver) { RO = new ResizeObserver(() => fitFrame()); RO.observe(stage); }
+  RESIZE = () => { clearTimeout(RESIZE_T); RESIZE_T = setTimeout(() => { fitFrame(); fitZoom(); }, 120); };
+  window.addEventListener('resize', RESIZE);
 }
 
 export function unmount() {
   if (page()) page().classList.remove('studio-page');
+  if (RESIZE) window.removeEventListener('resize', RESIZE);
+  if (RO) { RO.disconnect(); RO = null; }
+  RESIZE = null; clearTimeout(RESIZE_T);
   stop(); clearTimeout(SAVE_T); clearTimeout(POLL);
   if (keys) document.removeEventListener('keydown', keys);
   keys = null; host = null; TL = null; SEL = null;
@@ -44,17 +53,24 @@ export function unmount() {
 // ---------------------------------------------------------------- shell
 function draw() {
   host.innerHTML = `<div class="nle">
+    <header class="sbar">
+      <div class="segmode"><button class="on" data-sw="edit">${icon('layers', 's')}Editor</button><button data-sw="cut">${icon('cut', 's')}Quick cut</button></div>
+      <button class="iconbtn" id="tgsrc" title="sources panel">${icon('grid_view', 's')}</button>
+      <input class="etitle" id="tltitle" value="${attr(TL.title)}" placeholder="name this edit">
+      <span class="state" id="saved">saved</span>
+      <span class="sp"></span>
+      <span class="outsel"><label>output</label><select id="preset">${[['reels', '9:16 reel'], ['square', '1:1 feed'], ['landscape', '16:9']].map(([k, l]) => `<option value="${k}" ${TL.preset === k ? 'selected' : ''}>${l}</option>`).join('')}</select></span>
+      <span class="exp"><button class="btn sm" title="hand this edit to another editor">${icon('open', 's')}Export</button><span class="menu">
+        <a href="/api/v1/timelines/${esc(TL.id)}/export?format=fcpxml">FCPXML · Resolve / Final Cut</a>
+        <a href="/api/v1/timelines/${esc(TL.id)}/export?format=edl">EDL · Premiere, Avid</a>
+        <a href="/api/v1/timelines/${esc(TL.id)}/export?format=srt">SRT · captions</a>
+        <a href="/api/v1/timelines/${esc(TL.id)}/export?format=json">JSON · the raw edit</a></span></span>
+      <button class="btn sm filled" id="render">${icon('movie', 's')}Render</button>
+      <button class="iconbtn" id="tginsp" title="clip panel">${icon('tune', 's')}</button>
+    </header>
     <div class="nle-top">
-      <aside class="pane src"><div class="ph"><b>Sources</b><span class="sp"></span><span class="muted body-s">${JOBS.length} videos</span></div><div class="pb" id="srcbody"></div></aside>
+      <aside class="pane src"><div class="ph"><b>Sources</b><span class="sp"></span><span class="muted body-s">${JOBS.length}</span></div><div class="pb" id="srcbody"></div></aside>
       <section class="pane mon">
-        <div class="ph"><input class="etitle" id="tltitle" value="${attr(TL.title)}" placeholder="name this edit"><span class="tag" id="saved">saved</span><span class="sp"></span>
-          <select id="preset" title="output format">${[['reels', '9:16'], ['square', '1:1'], ['landscape', '16:9']].map(([k, l]) => `<option value="${k}" ${TL.preset === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
-          <button class="btn sm filled" id="render">${icon('movie', 's')}Render</button>
-          <span class="exp"><button class="btn sm" title="hand this edit to another editor">${icon('open', 's')}Export</button><span class="menu">
-            <a href="/api/v1/timelines/${esc(TL.id)}/export?format=fcpxml">FCPXML · Resolve / Final Cut</a>
-            <a href="/api/v1/timelines/${esc(TL.id)}/export?format=edl">EDL · Premiere, Avid</a>
-            <a href="/api/v1/timelines/${esc(TL.id)}/export?format=srt">SRT · captions</a>
-            <a href="/api/v1/timelines/${esc(TL.id)}/export?format=json">JSON · the raw edit</a></span></span></div>
         <div class="stage"><div class="frame ${TL.preset}" id="frame"><video id="pv" preload="metadata" playsinline></video><div class="burn" id="burn" hidden></div></div></div>
         <div class="transport">
           <button class="btn sm" id="tstart" title="back to the start (Home)">⏮</button>
@@ -89,8 +105,14 @@ function draw() {
       </div></div>
     </div></div>`;
 
+  $$('.segmode button').forEach((b) => b.onclick = () => { if (b.dataset.sw === 'cut' && SWITCH) SWITCH('cut'); });
+  const nle = () => host.querySelector('.nle');
+  const narrow = () => window.matchMedia('(max-width:1180px)').matches;
+  const after = () => setTimeout(() => { fitFrame(); fitZoom(); }, 60);
+  $('#tgsrc').onclick = (e) => { nle().classList.toggle(narrow() ? 'show-src' : 'no-src'); if (narrow()) nle().classList.remove('show-insp'); e.currentTarget.classList.toggle('on'); after(); };
+  $('#tginsp').onclick = (e) => { nle().classList.toggle(narrow() ? 'show-insp' : 'no-insp'); if (narrow()) nle().classList.remove('show-src'); e.currentTarget.classList.toggle('on'); after(); };
   $('#tltitle').oninput = (e) => { TL.title = e.target.value; save(); };
-  $('#preset').onchange = (e) => { TL.preset = e.target.value; const f = $('#frame'); if (f) f.className = 'frame ' + TL.preset; save(true); };
+  $('#preset').onchange = (e) => { TL.preset = e.target.value; const f = $('#frame'); if (f) f.className = 'frame ' + TL.preset; fitFrame(); save(true); };
   $('#render').onclick = renderNow;
   $('#tplay').onclick = toggle;
   $('#tstart').onclick = () => seek(0);
@@ -156,6 +178,19 @@ async function aiCuts() {
 // ---------------------------------------------------------------- the timeline
 function zoom(f) { PX = Math.max(2, Math.min(400, PX * f)); syncZoom(); drawTimeline(); }
 function syncZoom() { const z = $('#zoom'); if (z) z.value = Math.round(100 * Math.log(PX / 2) / Math.log(200)); }
+
+const RATIO = { reels: 9 / 16, square: 1, landscape: 16 / 9 };
+/** The monitor is sized here rather than by CSS: an aspect box with both maxima set overflows its stage. */
+function fitFrame() {
+  const stage = host && host.querySelector('.stage'), f = $('#frame');
+  if (!stage || !f || stage.clientHeight < 40) return;
+  const ar = RATIO[TL.preset] || 9 / 16, pad = 26;
+  const availW = Math.max(60, stage.clientWidth - pad), availH = Math.max(60, stage.clientHeight - pad);
+  let h = availH, w = h * ar;
+  if (w > availW) { w = availW; h = w / ar; }
+  f.style.width = Math.floor(w) + 'px';
+  f.style.height = Math.floor(h) + 'px';
+}
 function fitZoom() { const w = $('#tlscroll') ? $('#tlscroll').clientWidth - 28 : 900; PX = Math.max(2, w / Math.max(4, total())); syncZoom(); drawTimeline(); }
 
 function drawTimeline() {
@@ -391,7 +426,7 @@ function save(now) {
   };
   return now ? go() : (SAVE_T = setTimeout(go, 700));
 }
-function mark() { const m = $('#saved'); if (m) { m.textContent = dirty ? 'saving…' : 'saved'; m.className = 'tag ' + (dirty ? '' : 'ok'); } }
+function mark() { const m = $('#saved'); if (m) { m.textContent = dirty ? 'saving…' : 'saved'; m.className = 'state' + (dirty ? ' busy' : ''); } }
 
 async function renderNow() {
   const b = $('#render'); b.disabled = true;
@@ -407,7 +442,7 @@ async function pollRenders() {
   try { list = (await api('/renders?job_id=' + encodeURIComponent(TL.jobs[0] || ''))).filter((r) => (r.detail || {}).timeline_id === TL.id); } catch { /* ignore */ }
   const el = $('#renders');
   if (el) {
-    el.innerHTML = list.length ? `<div class="rhd"><b>Renders</b><span class="sp"></span><span class="muted body-s">${list.length}</span></div>` + list.slice(0, 4).map((r) => {
+    el.innerHTML = list.length ? `<div class="rhd" id="rfold"><b>Renders</b><span class="sp"></span><span class="muted body-s">${list.length}</span>${icon('chevron', 's')}</div>` + list.slice(0, 4).map((r) => {
       const busy = r.status === 'QUEUED' || r.status === 'RENDERING', p = (r.detail || {}).progress;
       return `<div class="evb"><div class="row"><span class="tag ${r.status === 'DONE' ? 'ok' : r.status === 'FAILED' ? 'err' : 'pending'}">${esc(r.status.toLowerCase())}${p ? ` · ${p.scene}/${p.of}` : ''}</span>
         <span class="muted body-s">${r.duration_seconds ? r.duration_seconds.toFixed(1) + 's' : ''}${r.size_bytes ? ' · ' + (r.size_bytes / 1e6).toFixed(1) + ' MB' : ''}</span><span class="sp"></span>
@@ -417,5 +452,8 @@ async function pollRenders() {
         ${r.status === 'DONE' ? `<video controls preload="none" poster="/api/v1/renders/${esc(r.id)}/poster.jpg" src="/api/v1/renders/${esc(r.id)}/video" style="margin-top:8px;width:100%;max-height:190px;border-radius:6px;background:#000"></video>` : ''}</div>`;
     }).join('') : '';
   }
-  if (list.some((r) => r.status === 'QUEUED' || r.status === 'RENDERING')) POLL = setTimeout(pollRenders, 2500);
+  const fold = $('#rfold');
+  if (fold) fold.onclick = () => el.classList.toggle('folded');
+  if (el && list.length && !list.some((r) => r.status === 'QUEUED' || r.status === 'RENDERING') && !el.dataset.touched) { el.classList.add('folded'); el.dataset.touched = '1'; }
+  if (list.some((r) => r.status === 'QUEUED' || r.status === 'RENDERING')) { if (el) el.classList.remove('folded'); POLL = setTimeout(pollRenders, 2500); }
 }
