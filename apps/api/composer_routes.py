@@ -277,6 +277,8 @@ class CutsResponse(BaseModel):
     duration_seconds: float | None
     refined: bool
     warning: str | None = None
+    timing: Literal["measured", "estimated"] = "measured"
+    timing_note: str | None = None
     cuts: list[CutProposal]
 
 
@@ -294,6 +296,13 @@ def job_cuts(request: Request, ctx: Ctx, job_id: str, refine: bool | None = None
         except ff.FFmpegError:
             duration = None
     measured = _measured_transcript(request, job_id)
+    timing, timing_note = "measured", None
+    if measured is None:
+        # No word timings: the only sentence ends available are interpolated across each transcript
+        # segment by character count, which lands inside the speaker's last word (~0.7 s early), so the
+        # cuts below are padded approximations. Measure them now - the next request gets exact edges.
+        timing = "estimated"
+        timing_note = _request_timings(request, job)
     cuts = propose_cuts(analysis, duration, ctx.limits(), transcript=measured)
     warning = None
     refined = False
@@ -306,7 +315,8 @@ def job_cuts(request: Request, ctx: Ctx, job_id: str, refine: bool | None = None
                                        institution_context=reg.institution_context if reg else get_settings().institution_context,
                                        transcript=measured)
         refined = warning is None
-    return CutsResponse(job_id=job_id, duration_seconds=duration, refined=refined, warning=warning, cuts=cuts)
+    return CutsResponse(job_id=job_id, duration_seconds=duration, refined=refined, warning=warning,
+                        timing=timing, timing_note=timing_note, cuts=cuts)
 
 
 def _measured_transcript(request: Request, job_id: str):
@@ -320,6 +330,23 @@ def _measured_transcript(request: Request, job_id: str):
     except Exception:  # noqa: BLE001 - a missing or unreadable transcript just means "estimate it"
         log.debug("no measured transcript for %s", job_id)
         return None
+
+
+def _request_timings(request: Request, job) -> str:
+    """Kick off the word-timing measurement this job never had (videos analysed before measured
+    transcripts existed, or whose run failed). Returns what to tell the user."""
+    state = request.app.state
+    if getattr(state, "transcriber", None) is None:
+        return ("Cut edges are approximate: word timings are off, so sentence ends are estimated and a cut can "
+                "clip the last syllable. Set TRANSCRIBE_PROVIDER=whisper to place cuts on real speech.")
+    if not (job.source.path and Path(job.source.path).exists()):
+        return ("Cut edges are approximate: this job has no local media to measure, so sentence ends are "
+                "estimated from the analysis transcript.")
+    from apps.api.transcribe_routes import transcribe_job
+
+    state.runner.run_async(lambda: transcribe_job(state, job.id, force=False))
+    return ("Measuring word timings now - these edges are estimated from the analysis transcript and may run a "
+            "little long. Reopen the cuts in a moment for exact sentence ends.")
 
 
 @router.get("/api/v1/jobs/{job_id}/captions")

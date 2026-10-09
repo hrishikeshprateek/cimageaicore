@@ -114,6 +114,9 @@ async def lifespan(app: FastAPI):
     rs.apply(app.state.runtime_settings, settings, get_composer_settings())
     app.state.transcriber = build_transcriber(settings)
     app.state.transcripts = build_transcript_store(store, settings.transcripts_dir)
+    stale_transcripts = app.state.transcripts.mark_stale()
+    if stale_transcripts:
+        log.warning("%d transcription(s) were interrupted by a restart and will be measured again", stale_transcripts)
     app.state.timelines = build_timeline_store(store, settings.data_dir / "timelines")
     app.state.watcher = _build_watcher(app, settings)
     app.state.watcher.start()

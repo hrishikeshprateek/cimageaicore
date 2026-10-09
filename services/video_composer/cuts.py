@@ -24,6 +24,11 @@ log = logging.getLogger(__name__)
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "video-composer"
 WORDS_PER_SECOND = 2.4                 # conversational Hindi / English
 _IMPORTANCE = {"high": 0.5, "medium": 0.3, "low": 0.1}
+# Estimated sentence ends are interpolated across a segment by character count, which ignores the pauses
+# *between* sentences - so they land early, measured at -0.66 s on average against a real transcript, i.e.
+# inside the speaker's last word. Without measured word times we therefore push the out point past the
+# estimate: a cut that carries a beat of silence is fine, one that clips the final syllable is not.
+ESTIMATE_TAIL_PAD = 0.9
 
 
 class CutProposal(BaseModel):
@@ -133,22 +138,29 @@ class Edges:
         if hi <= lo:
             return round(hi, 2)
         # a request that falls inside a sentence is a request to hear that sentence out
+        ceiling = hi if duration is None else min(hi, duration)
         holding = [e for s, e in self.spans if s - 0.25 <= want <= e + 0.25 and lo <= e <= hi]
         if holding:
-            return self._place(min(holding))
+            return self._place(min(holding), ceiling)
         for pool in (self.ends, self.clauses, self.open_ends):
             inside = [b for b in pool if lo <= b <= hi]
             if inside:
-                return self._place(min(inside, key=lambda b: abs(b - want)))
+                return self._place(min(inside, key=lambda b: abs(b - want)), ceiling)
         # Nothing to snap to. If the window already reaches the end of the footage, end there: the video
         # stops, so nobody is interrupted. (Estimated sentence spans routinely run past the real duration.)
         if duration is not None and hi >= duration - 0.05:
             return round(duration, 2)
         return round(min(max(want, lo), hi), 2)
 
-    def _place(self, t: float) -> float:
-        """Put the chosen boundary inside the measured silence after the last word, when we have one."""
-        return self.tr.snap_out(t) if self.tr is not None else round(t, 2)
+    def _place(self, t: float, ceiling: float | None = None) -> float:
+        """Put the chosen boundary where it will not clip speech: inside the measured silence after the
+        last word when we have one, otherwise just past an interpolated end (see ESTIMATE_TAIL_PAD)."""
+        if self.tr is not None:
+            return self.tr.snap_out(t)
+        padded = t + ESTIMATE_TAIL_PAD
+        if ceiling is not None:
+            padded = min(padded, ceiling)
+        return round(max(t, padded), 2)
 
 
 def _clamp_window(t_in: float, t_out: float, duration: float | None, lim: CutLimits, *, must_include: tuple[float, float] | None = None,

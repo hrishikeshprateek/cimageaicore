@@ -6,6 +6,7 @@ import json
 from fastapi.testclient import TestClient
 
 from apps.api.runtime_settings import RuntimeSettings, load, save
+from services.transcribe.model import Sentence, Transcript
 
 
 def _fields(payload) -> dict:
@@ -104,3 +105,25 @@ def test_a_corrupt_file_is_ignored_rather_than_breaking_the_boot(tmp_path):
     assert load(p).set_values() == {}
     save(p, RuntimeSettings(max_cuts=7))
     assert load(p).set_values() == {"max_cuts": 7}
+
+
+def test_an_interrupted_measurement_is_retried_rather_than_blocking_for_ever(tmp_path):
+    """Why reels kept clipping speech in production.
+
+    `get()` only returns a transcript whose status is 'ready'. A measurement killed mid-run (a restart,
+    or the connection pool closing under the background thread) left a 'running' row that `get()` would
+    never return, so the cutter fell back to interpolated sentence ends - which land inside the
+    speaker's last word - and never recovered. Both stores now sweep those at startup, like renders do.
+    """
+    from apps.api.transcript_store import JsonTranscriptStore, PostgresTranscriptStore
+
+    assert hasattr(PostgresTranscriptStore, "mark_stale")       # the Postgres path is the one that stuck
+
+    store = JsonTranscriptStore(tmp_path / "transcripts")
+    store.mark("job1", "running")
+    assert store.get("job1") is None                            # nothing for the cutter to use
+    assert store.mark_stale() == 0                              # the JSON store only holds finished files
+
+    t = Transcript(job_id="job1", seconds=4.0, sentences=[Sentence(i=0, text="CIMAGE ने मेरी ज़िंदगी बदल दी।", start=0.5, end=3.9)])
+    store.put(t)
+    assert store.get("job1") is not None and store.get("job1").sentences[0].end == 3.9

@@ -8,7 +8,7 @@ import pytest
 
 from services.block_engine.schemas import VideoAnalysisV1
 from services.video_composer.captions import CaptionCue, chunk_text, cues_for_window, to_ass, to_srt
-from services.video_composer.cuts import AICutsV1, CutLimits, propose_cuts, refine_with_ai
+from services.video_composer.cuts import ESTIMATE_TAIL_PAD, AICutsV1, CutLimits, propose_cuts, refine_with_ai
 from services.video_composer.renderer import LowerThird, RenderSpec, _Placed, build_command, font_paths
 from services.video_composer.settings import ComposerSettings
 from services.video_composer.framing import Subject, focus_for_center, sample_times
@@ -154,11 +154,13 @@ def test_rule_based_cuts_from_quotes_and_key_moments():
     assert best.hook_line == "CIMAGE ने मेरी ज़िंदगी बदल दी।"   # quote + high key moment inside + named speaker wins
     assert best.in_seconds <= 25 <= 30 <= best.out_seconds and "key moment" in best.reason
     assert 20 <= best.in_seconds < 30   # snapped to the estimated start of the sentence before the quote, not an arbitrary lead-in
-    assert best.out_seconds == 40       # runs to the end of the speaker turn
+    # runs to the end of the speaker turn (40 s) plus the pad that keeps an interpolated boundary off the
+    # speaker's last word - see ESTIMATE_TAIL_PAD
+    assert best.out_seconds == 40 + ESTIMATE_TAIL_PAD
     assert 8 <= best.duration <= 60
     assert best.lower_third and best.lower_third.name == "Priya Kumari" and "Wipro" in (best.lower_third.role or "")
     assert best.captions and all(0 <= c.start < c.end <= best.duration + 0.01 for c in best.captions)
-    assert best.in_ts.count(":") == 2 and best.out_ts == "00:00:40"
+    assert best.in_ts.count(":") == 2 and best.out_ts == "00:00:40.9"
     second = next(c for c in cuts if c.hook_line and c.hook_line.startswith("I would tell"))
     assert second.in_seconds <= 65 <= second.out_seconds
     for i, c in enumerate(cuts):
@@ -203,7 +205,8 @@ def test_ai_refinement_uses_gateway_and_falls_back():
     # halfway through "I would tell every junior to join the coding club in the first semester." (59.1 -> 80 s),
     # so the out point moves forward to that full stop instead of cutting the speaker off, and the in point
     # back to the start of the sentence at 40 s instead of clipping its first word.
-    assert warning is None and len(cuts) == 1 and cuts[0].source == "ai" and cuts[0].in_seconds == 40 and cuts[0].out_seconds == 80
+    assert warning is None and len(cuts) == 1 and cuts[0].source == "ai" and cuts[0].in_seconds == 40
+    assert cuts[0].out_seconds == 80 + ESTIMATE_TAIL_PAD
     assert cuts[0].lower_third.name == "Priya Kumari" and cuts[0].captions
     sys_prompt, user_prompt, schema = good.calls[0]
     assert "CIMAGE" in sys_prompt and "00:00:30" in user_prompt and "rule-based" in user_prompt.lower() and schema["properties"]["cuts"]
@@ -289,10 +292,16 @@ def test_every_proposed_cut_ends_on_a_sentence_end():
 
     a = analysis()
     duration = 120.0
-    stops = {round(e, 2) for seg in a.transcript for _s, e, _t in sentence_spans(seg)}
+    stops = sorted({round(e, 2) for seg in a.transcript for _s, e, _t in sentence_spans(seg)})
     edges = Edges(a, None)
     for c in propose_cuts(a, duration, CutLimits()):
-        assert c.out_seconds in stops or c.out_seconds == duration, f"{c.id} ends at {c.out_seconds}, mid-sentence"
+        # without measured word times a cut ends at a sentence end plus the pad, and never before one:
+        # stopping early is what clips the speaker's last syllable
+        before = [x for x in stops if x <= c.out_seconds + 0.01]
+        assert before, f"{c.id} ends at {c.out_seconds}, before any sentence end"
+        overshoot = c.out_seconds - max(before)
+        assert overshoot <= ESTIMATE_TAIL_PAD + 0.01 or c.out_seconds == duration, \
+            f"{c.id} ends {overshoot:.2f}s past the last sentence end"
         assert c.in_seconds in {round(s, 2) for s in edges.starts} or c.in_seconds == 0.0
 
 
@@ -303,12 +312,12 @@ def test_min_and_max_length_adjustments_re_snap_to_a_sentence_end():
     edges = Edges(a, None)          # full stops at 10.77, 21.54, 30.77, 40, 59.13, 80, 92.08, 120
     # stretching a too-short window to min_seconds lands on the next full stop, not at in + min_seconds
     lim = CutLimits(min_seconds=8.0, max_seconds=60.0)
-    assert _clamp_window(0.0, 3.0, 120.0, lim, edges=edges) == (0.0, 10.77)
+    assert _clamp_window(0.0, 3.0, 120.0, lim, edges=edges) == (0.0, round(10.77 + ESTIMATE_TAIL_PAD, 2))
     # trimming a too-long window pulls back to the last full stop inside max_seconds, not to in + max_seconds
     lim2 = CutLimits(min_seconds=8.0, max_seconds=25.0)
-    assert _clamp_window(0.0, 100.0, 120.0, lim2, edges=edges) == (0.0, 21.54)
+    assert _clamp_window(0.0, 100.0, 120.0, lim2, edges=edges) == (0.0, round(21.54 + ESTIMATE_TAIL_PAD, 2))
     # the chosen stop is the one nearest the length we wanted, and always inside the limits
-    assert edges.snap_out(0.0, 28.0, CutLimits(min_seconds=8.0, max_seconds=60.0), 120.0) == 30.77
+    assert edges.snap_out(0.0, 28.0, CutLimits(min_seconds=8.0, max_seconds=60.0), 120.0) == round(30.77 + ESTIMATE_TAIL_PAD, 2)
 
 
 def test_cut_does_not_end_on_a_dangling_conjunction():
@@ -324,7 +333,7 @@ def test_cut_does_not_end_on_a_dangling_conjunction():
     # the first segment trails off on "and", so 30 s is not offered as a full stop and the window runs
     # on to the real one at the end of the following sentence
     assert 30.0 not in edges.ends and 30.0 in edges.open_ends
-    assert edges.snap_out(0.0, 30.0, CutLimits(min_seconds=8.0, max_seconds=60.0), 40.0) == 40.0
+    assert edges.snap_out(0.0, 30.0, CutLimits(min_seconds=8.0, max_seconds=60.0), 40.0) == 40.0   # capped by the footage
 
 
 def test_measured_transcript_places_cuts_in_the_silence():
@@ -343,3 +352,40 @@ def test_measured_transcript_places_cuts_in_the_silence():
     out = edges.snap_out(10.0, 26.0, CutLimits(min_seconds=8.0, max_seconds=60.0), 50.0)   # mid-sentence request
     assert 33.0 <= out <= 33.8, out                 # ends at the full stop, inside the measured quiet
     assert edges.snap_in(21.0) == pytest.approx(19.9, abs=0.2)   # starts in the quiet before the first word
+
+
+def test_an_interpolated_boundary_never_lands_before_the_speaker_finishes():
+    """The regression behind "it still cuts the speaker off".
+
+    Estimated sentence ends are interpolated across a segment by character count, so they fall inside
+    the last word - measured at -0.66 s against a real transcript of the campus-tour clip. Snapping to
+    one of those exactly still clipped the final syllable; the out point has to sit past it.
+    """
+    from services.transcribe.model import Sentence, Transcript, Word
+    from services.video_composer.cuts import ESTIMATE_TAIL_PAD, Edges
+
+    a = analysis()
+    lim = CutLimits(min_seconds=8.0, max_seconds=60.0)
+    est = Edges(a, None)
+    # the estimated end of the first segment's last sentence is 40.0; the cut ends after it, not on it
+    assert est.snap_out(21.54, 38.0, lim, 120.0) > 40.0
+    assert est.snap_out(21.54, 38.0, lim, 120.0) == round(40.0 + ESTIMATE_TAIL_PAD, 2)
+    # the pad never pushes a cut past the footage or past max_seconds
+    assert est.snap_out(0.0, 38.0, lim, 40.2) <= 40.2
+    assert est.snap_out(0.0, 38.0, CutLimits(min_seconds=8.0, max_seconds=40.5), 120.0) <= 40.5
+
+    # with measured word times there is nothing to guess: the boundary is the real one, placed in the
+    # silence after the last word, and no pad is added
+    def sent(i, text, s0, s1):
+        toks = text.split()
+        step = (s1 - s0) / len(toks)
+        return Sentence(i=i, text=text, start=s0, end=s1,
+                        words=[Word(w=w, start=round(s0 + k * step, 3), end=round(s0 + (k + 1) * step - 0.02, 3)) for k, w in enumerate(toks)])
+
+    tr = Transcript(job_id="j", seconds=60.0, silences=[(18.82, 19.4)],
+                    sentences=[sent(0, "Air conditioned spaces, where learning becomes immersive.", 12.34, 18.82)])
+    measured = Edges(a, tr)
+    short = CutLimits(min_seconds=4.0, max_seconds=60.0)       # the sentence is only 6.5 s long
+    out = measured.snap_out(12.34, 17.0, short, 60.0)
+    assert 18.82 <= out <= 19.4, out          # at the real end, inside the measured quiet
+    assert out < 18.82 + ESTIMATE_TAIL_PAD    # no padding guesswork when the times are real

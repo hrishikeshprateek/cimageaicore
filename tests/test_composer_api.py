@@ -145,3 +145,27 @@ def test_template_upload_creates_a_real_template(composer_env, tiny_video: Path,
         done = _wait(client, f"/api/v1/renders/{r.json()['renders'][0]['id']}", lambda d: d["status"] in ("DONE", "FAILED"))
         assert done["status"] == "DONE" and done["template"] == "cimage", done.get("error")
         assert client.delete("/api/v1/composer/templates/cimage/layers", params={"preset": "reels", "layer": "frame"}).json()["layouts"]["reels"]["layers"] == []
+
+
+def test_cuts_say_whether_the_edges_are_measured_and_ask_for_timings_when_not(app_env, tiny_video):
+    """A job with no measured transcript gets approximate edges - and the measurement is kicked off."""
+    from apps.api.main import create_app
+
+    with TestClient(create_app()) as client:
+        with tiny_video.open("rb") as f:
+            job_id = client.post("/api/v1/analyze", files={"file": (tiny_video.name, f, "video/mp4")}).json()["job_id"]
+        deadline = time.time() + 20
+        while time.time() < deadline and client.get(f"/api/v1/jobs/{job_id}").json()["state"] not in ("BLOCKS_COMPLETE", "FAILED"):
+            time.sleep(0.1)
+        client.delete(f"/api/v1/jobs/{job_id}/transcript")          # as if analysed before word timings existed
+
+        d = client.get(f"/api/v1/jobs/{job_id}/cuts").json()
+        assert d["timing"] == "estimated" and d["timing_note"]
+        assert "word timings" in d["timing_note"] or "no local media" in d["timing_note"]
+
+        # the request queued the measurement, so once it lands the edges are reported as measured
+        deadline = time.time() + 30
+        while time.time() < deadline and client.get(f"/api/v1/jobs/{job_id}/transcript").status_code != 200:
+            time.sleep(0.2)
+        if client.get(f"/api/v1/jobs/{job_id}/transcript").status_code == 200:
+            assert client.get(f"/api/v1/jobs/{job_id}/cuts").json()["timing"] == "measured"

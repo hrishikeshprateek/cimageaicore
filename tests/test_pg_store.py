@@ -133,3 +133,36 @@ def test_restart_reverts_interrupted_embedding_to_blocks_complete(store, tiny_vi
     store.transition(job.id, JobState.EMBEDDING)
     store.load()
     assert store.get(job.id).state == JobState.BLOCKS_COMPLETE and store.get(job.id).error is None
+
+
+def test_interrupted_transcripts_are_swept_so_the_cutter_gets_real_word_times(store, tiny_video):
+    """The production failure behind reels clipping speech.
+
+    `get()` only hands back a 'ready' transcript. A measurement killed mid-run left a 'running' row -
+    two of them sat in the live database from one day to the next - and `get()` returning None made the
+    cutter fall back to interpolated sentence ends, which land inside the speaker's last word.
+    """
+    from apps.api.transcript_store import PostgresTranscriptStore
+    from services.transcribe.model import Sentence, Transcript, Word
+
+    ts = PostgresTranscriptStore(store.pool)
+    interrupted = store.create(from_upload(tiny_video).info, "mock", "mock-v1")
+    finished = store.create(from_upload(tiny_video).info, "mock", "mock-v1")
+
+    ts.mark(interrupted.id, "running")
+    assert ts.get(interrupted.id) is None                    # nothing for the cutter -> estimated edges
+    assert ts.status(interrupted.id)["status"] == "running"
+
+    assert ts.mark_stale() == 1
+    st = ts.status(interrupted.id)
+    assert st["status"] == "failed" and st["error"] == "interrupted by restart"
+    assert ts.mark_stale() == 0                              # idempotent: a finished row is left alone
+
+    # a completed measurement is returned with its real word times and survives the sweep
+    t = Transcript(job_id=finished.id, seconds=4.0, model="whisper:test", language="hi",
+                   sentences=[Sentence(i=0, text="CIMAGE ने मेरी ज़िंदगी बदल दी।", start=0.5, end=3.9,
+                                       words=[Word(w="CIMAGE", start=0.5, end=1.1), Word(w="बदल", start=3.2, end=3.9)])])
+    ts.put(t, media_id=finished.media_id)
+    assert ts.mark_stale() == 0
+    got = ts.get(finished.id)
+    assert got is not None and got.sentences[0].end == 3.9 and got.sentences[0].words[-1].end == 3.9

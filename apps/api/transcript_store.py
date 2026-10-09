@@ -56,6 +56,14 @@ class JsonTranscriptStore:
             return True
         return False
 
+    def mark_stale(self) -> int:
+        """A measurement left running by a previous process cannot resume -> failed, so it is retried.
+
+        The JSON store only ever holds finished transcripts (`put` writes the whole file at once), so
+        there is nothing to sweep; the method exists so both stores answer the same call.
+        """
+        return 0
+
 
 class PostgresTranscriptStore:
     kind = "postgres"
@@ -110,6 +118,19 @@ class PostgresTranscriptStore:
     def delete(self, job_id: str) -> bool:
         with self.pool.connection() as conn, conn.transaction():
             return conn.execute("DELETE FROM transcripts WHERE job_id = %s", (job_id,)).rowcount > 0
+
+    def mark_stale(self) -> int:
+        """A measurement left 'running' by a previous process cannot resume -> 'failed'.
+
+        Without this a video whose transcription was interrupted (a restart, or the connection pool
+        closing under the background thread) keeps a 'running' row for ever. `get()` only returns a
+        'ready' transcript, so the cutter silently falls back to interpolated sentence ends - which land
+        inside the speaker's last word - and never recovers. Same policy as renders / processing_jobs.
+        """
+        with self.pool.connection() as conn, conn.transaction():
+            cur = conn.execute("UPDATE transcripts SET status = 'failed', error = 'interrupted by restart', updated_at = now() "
+                               "WHERE status = 'running'")
+            return cur.rowcount or 0
 
 
 def build_transcript_store(store, transcripts_dir: Path):
