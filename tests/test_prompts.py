@@ -12,7 +12,7 @@ def test_registry_lists_reads_saves_and_activates(tmp_path: Path):
     reg = PromptRegistry(tmp_path / "prompts", tmp_path / "prompt_config.json", defaults={"video-analysis": "v2"}, institution_context="Test College")
     kinds = {k["kind"]: k for k in reg.describe()["kinds"]}
     assert set(kinds) == set(KINDS) and kinds["video-analysis"]["active"] == "v2"
-    assert [v["version"] for v in kinds["video-analysis"]["versions"]] == ["v2", "v1"]          # default first, then natural order
+    assert [v["version"] for v in kinds["video-analysis"]["versions"]] == ["v2", "v1", "v3"]    # default first, then natural order
     assert [v["version"] for v in kinds["people-pass"]["versions"]] == ["people_v1"]             # people_* never leaks into video-analysis
     assert all(v["source"] == "bundled" for v in kinds["blog"]["versions"])
     system, user = reg.prompt("video-analysis")
@@ -23,27 +23,27 @@ def test_registry_lists_reads_saves_and_activates(tmp_path: Path):
         reg.save("video-analysis", "v2", reg.read("video-analysis", "v2"))
     # a new version must keep the sections and the kind's prefix; placeholders missing are warnings, not errors
     with pytest.raises(ValueError):
-        reg.save("video-analysis", "v3", "no sections here")
+        reg.save("video-analysis", "v4", "no sections here")
     with pytest.raises(ValueError):
         reg.save("video-analysis", "custom3", "## system\nx\n## user\ny")
     text = reg.read("video-analysis", "v2").replace("Be faithful.", "Be faithful and brief.")
-    path = reg.save("video-analysis", "v3", text)
-    assert path == tmp_path / "prompts" / "video-analysis" / "v3.md" and reg.path("video-analysis", "v3") == path
-    assert {v["version"]: v["source"] for v in reg.versions("video-analysis")} == {"v2": "bundled", "v1": "bundled", "v3": "custom"}
-    assert reg.suggest_version("video-analysis") == "v4" and reg.suggest_version("blog").startswith("blog_v") and reg.suggest_version("cuts") == "cuts_v2"
+    path = reg.save("video-analysis", "v4", text)
+    assert path == tmp_path / "prompts" / "video-analysis" / "v4.md" and reg.path("video-analysis", "v4") == path
+    assert {v["version"]: v["source"] for v in reg.versions("video-analysis")} == {"v2": "bundled", "v1": "bundled", "v3": "bundled", "v4": "custom"}
+    assert reg.suggest_version("video-analysis") == "v5" and reg.suggest_version("blog").startswith("blog_v") and reg.suggest_version("cuts") == "cuts_v2"
     with pytest.raises(FileExistsError):
-        reg.save("video-analysis", "v3", text)                     # exists -> needs overwrite=True
-    reg.save("video-analysis", "v3", text + "\n", overwrite=True)
+        reg.save("video-analysis", "v4", text)                     # exists -> needs overwrite=True
+    reg.save("video-analysis", "v4", text + "\n", overwrite=True)
     # activation persists and notifies listeners; the default is not stored
     seen = []
     reg.on_change(lambda r: seen.append(r.active("video-analysis")))
-    reg.set_active("video-analysis", "v3")
-    assert reg.active("video-analysis") == "v3" and seen == ["v3"] and "and brief" in reg.prompt("video-analysis")[0]
-    assert PromptRegistry(tmp_path / "prompts", tmp_path / "prompt_config.json", defaults={"video-analysis": "v2"}).active("video-analysis") == "v3"
+    reg.set_active("video-analysis", "v4")
+    assert reg.active("video-analysis") == "v4" and seen == ["v4"] and "and brief" in reg.prompt("video-analysis")[0]
+    assert PromptRegistry(tmp_path / "prompts", tmp_path / "prompt_config.json", defaults={"video-analysis": "v2"}).active("video-analysis") == "v4"
     with pytest.raises(ValueError):
-        reg.delete("video-analysis", "v3")                          # active
-    reg.set_active("video-analysis", "v2"); reg.delete("video-analysis", "v3")
-    assert reg.config.active == {} and reg.path("video-analysis", "v3") is None
+        reg.delete("video-analysis", "v4")                          # active
+    reg.set_active("video-analysis", "v2"); reg.delete("video-analysis", "v4")
+    assert reg.config.active == {} and reg.path("video-analysis", "v4") is None
     # context + roster overlay
     reg.set_institution_context("  CIMAGE, Patna  ")
     assert reg.institution_context == "CIMAGE, Patna"
@@ -62,18 +62,18 @@ def test_editor_api_and_live_reload(app_env, monkeypatch):
     with TestClient(create_app()) as client:
         d = client.get("/api/v1/prompts").json()
         va = next(k for k in d["kinds"] if k["kind"] == "video-analysis")
-        assert va["active"] == "v2" and any(v["version"] == "v1" for v in va["versions"]) and d["institution_context"]
-        r = client.get("/api/v1/prompts/video-analysis/v2").json()
-        assert r["source"] == "bundled" and r["active"] and r["suggested_version"] == "v3" and "## system" in r["text"]
+        assert va["active"] == "v3" and any(v["version"] == "v1" for v in va["versions"]) and d["institution_context"]
+        r = client.get("/api/v1/prompts/video-analysis/v3").json()
+        assert r["source"] == "bundled" and r["active"] and r["suggested_version"] == "v4" and "## system" in r["text"]
         assert client.get("/api/v1/prompts/video-analysis/nope").status_code == 404
         assert client.get("/api/v1/prompts/what/v1").status_code == 404
-        assert client.post("/api/v1/prompts/video-analysis", json={"version": "v2", "text": r["text"]}).status_code == 409
-        assert client.post("/api/v1/prompts/video-analysis", json={"version": "v3", "text": "broken"}).status_code == 400
-        new = r["text"].replace("institutional media analyst", "institutional media analyst (v3 test)")
-        s = client.post("/api/v1/prompts/video-analysis", json={"version": "v3", "text": new, "activate": True}).json()
-        assert s["active"] == "v3" and s["saved"].endswith("prompts/video-analysis/v3.md")
+        assert client.post("/api/v1/prompts/video-analysis", json={"version": "v3", "text": r["text"]}).status_code == 409
+        assert client.post("/api/v1/prompts/video-analysis", json={"version": "v4", "text": "broken"}).status_code == 400
+        new = r["text"].replace("institutional media analyst", "institutional media analyst (v4 test)")
+        s = client.post("/api/v1/prompts/video-analysis", json={"version": "v4", "text": new, "activate": True}).json()
+        assert s["active"] == "v4" and s["saved"].endswith("prompts/video-analysis/v4.md")
         engine = client.app.state.engine
-        assert engine.prompt_version == "v3" and "(v3 test)" in engine.system_template        # reloaded live, no restart
+        assert engine.prompt_version == "v4" and "(v4 test)" in engine.system_template        # reloaded live, no restart
         # institution context flows into the engine and the writer
         client.put("/api/v1/prompts/context", json={"institution_context": "Some Other College"})
         assert engine.institution_context == "Some Other College" and client.app.state.blog_agent.institution_context == "Some Other College"
@@ -81,8 +81,8 @@ def test_editor_api_and_live_reload(app_env, monkeypatch):
         assert engine.institution_context == client.app.state.settings.institution_context
         # switch back and delete the custom version
         assert client.put("/api/v1/prompts/video-analysis/active", json={"version": "v2"}).status_code == 200
-        assert engine.prompt_version == "v2" and "(v3 test)" not in engine.system_template
-        assert client.delete("/api/v1/prompts/video-analysis/v3").status_code == 200
+        assert engine.prompt_version == "v2" and "(v4 test)" not in engine.system_template
+        assert client.delete("/api/v1/prompts/video-analysis/v4").status_code == 200
         assert client.delete("/api/v1/prompts/video-analysis/v2").status_code == 404                # bundled: not deletable
         # blog writer follows its own kind
         b = client.get("/api/v1/prompts/blog/blog_v2").json()

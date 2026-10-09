@@ -133,6 +133,20 @@ def run_transcript(request: Request, job_id: str, force: bool = True) -> dict[st
     return {"job_id": job_id, "status": "running", "provider": state.transcriber.name}
 
 
+@router.post("/transcripts/rerun", status_code=status.HTTP_202_ACCEPTED)
+def rerun_transcripts(request: Request) -> dict[str, Any]:
+    """Re-measure every video's word timings - what you run after changing the transcription settings, so
+    existing videos get their cuts placed on sentences found with the new ones."""
+    state = request.app.state
+    if getattr(state, "transcriber", None) is None:
+        raise HTTPException(501, "word timings are off - set TRANSCRIBE_PROVIDER=whisper")
+    jobs = [j for j in state.store.list() if j.source.path]
+    for job in jobs:
+        state.runner.run_async(lambda jid=job.id: transcribe_job(state, jid, force=True))
+    state.store.audit("admin", "transcripts.rerun", "transcript", None, {"queued": len(jobs)})
+    return {"queued": len(jobs), "provider": state.transcriber.name}
+
+
 @router.delete("/jobs/{job_id}/transcript")
 def delete_transcript(request: Request, job_id: str) -> dict[str, Any]:
     return {"deleted": _store(request).delete(job_id)}

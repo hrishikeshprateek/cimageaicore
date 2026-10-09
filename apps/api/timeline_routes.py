@@ -78,9 +78,11 @@ def create_timeline(request: Request, body: NewTimeline) -> dict[str, Any]:
             ctx = _ctx(request)
             result = request.app.state.store.load_result(job)
             if result is not None:
+                from apps.api.composer_routes import _measured_transcript
                 from services.video_composer.cuts import propose_cuts
 
-                for c in propose_cuts(result.analysis, job.source.duration_seconds, ctx.limits()):
+                for c in propose_cuts(result.analysis, job.source.duration_seconds, ctx.limits(),
+                                      transcript=_measured_transcript(request, job.id)):
                     clips.append(Clip(job_id=job.id, source_path=str(path), in_seconds=c.in_seconds, out_seconds=c.out_seconds,
                                       source_width=w, source_height=h, captions=list(c.captions), lower_third=c.lower_third,
                                       label=c.title[:60], note=c.reason or ""))

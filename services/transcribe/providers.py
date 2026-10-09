@@ -74,7 +74,8 @@ class WhisperTranscriber:
     name = "whisper"
 
     def __init__(self, model_size: str = "large-v3-turbo", *, device: str = "auto", compute_type: str = "int8",
-                 language: str | None = None, download_root: Path | None = None, beam_size: int = 5, threads: int = 0):
+                 language: str | None = None, download_root: Path | None = None, beam_size: int = 5, threads: int = 0,
+                 carry_context: bool = True, initial_prompt: str = "", sentence_gap: float = 0.6):
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
@@ -82,6 +83,9 @@ class WhisperTranscriber:
         self.download_root = str(download_root) if download_root else None
         self.beam_size = beam_size
         self.threads = threads
+        self.carry_context = carry_context
+        self.initial_prompt = initial_prompt or ""
+        self.sentence_gap = sentence_gap
 
     @property
     def model(self):
@@ -103,8 +107,11 @@ class WhisperTranscriber:
         silences = find_silences(audio)
         it, info = self.model.transcribe(
             audio, language=language or self.language, beam_size=self.beam_size, word_timestamps=True,
-            vad_filter=False,                      # VAD squeezes the silences out of the timeline; the cutter needs them
-            condition_on_previous_text=False,      # stops one bad line from derailing the rest
+            vad_filter=False,                              # VAD squeezes the silences out of the timeline; the cutter needs them
+            condition_on_previous_text=self.carry_context,  # Whisper punctuates from context: without it each 30 s window is
+                                                           # decoded blind and the full stops (and the Devanagari danda) go
+                                                           # missing, which leaves the cutter nothing to end a reel on.
+            initial_prompt=self.initial_prompt or None,    # steers spelling of names and the punctuation style
         )
         words: list[Word] = []
         for seg in it:
@@ -112,7 +119,7 @@ class WhisperTranscriber:
                 text = (w.word or "").strip()
                 if text:
                     words.append(Word(w=text, start=round(float(w.start), 3), end=round(float(w.end), 3), prob=round(float(w.probability or 1.0), 3)))
-        sentences = sentences_from_words(words)
+        sentences = sentences_from_words(words, max_gap=self.sentence_gap)
         if segments:
             attach_speakers(sentences, segments)
         t = Transcript(job_id=job_id, language=getattr(info, "language", None), model=f"whisper:{self.model_size}",
@@ -160,6 +167,9 @@ def build_transcriber(settings):
     if provider == "whisper":
         return WhisperTranscriber(settings.whisper_model, device=settings.whisper_device, compute_type=settings.whisper_compute_type,
                                   language=settings.whisper_language or None, download_root=settings.models_dir,
-                                  threads=settings.whisper_threads)
+                                  threads=settings.whisper_threads,
+                                  carry_context=getattr(settings, "whisper_carry_context", True),
+                                  initial_prompt=getattr(settings, "whisper_initial_prompt", "") or "",
+                                  sentence_gap=getattr(settings, "whisper_sentence_gap", 0.6))
     log.warning("unknown TRANSCRIBE_PROVIDER=%s - precise cutting stays off", provider)
     return None

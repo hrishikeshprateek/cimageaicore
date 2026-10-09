@@ -199,7 +199,11 @@ def test_ai_refinement_uses_gateway_and_falls_back():
     good = FakeProvider(json.dumps({"cuts": [{"in_time": "00:00:41", "out_time": "00:01:12", "title": "Advice to juniors", "hook_line": "join the coding club",
                                               "reason": "complete statement", "lower_third_name": "Priya Kumari", "lower_third_role": "BCA 2024"}]}))
     cuts, warning = refine_with_ai(good, a, 120.0, rule, institution_context="CIMAGE")
-    assert warning is None and len(cuts) == 1 and cuts[0].source == "ai" and cuts[0].in_seconds == 41 and cuts[0].out_seconds == 72
+    # The model's times are snapped like the rule-based ones: it asked for 00:00:41 -> 00:01:12, but 72 s is
+    # halfway through "I would tell every junior to join the coding club in the first semester." (59.1 -> 80 s),
+    # so the out point moves forward to that full stop instead of cutting the speaker off, and the in point
+    # back to the start of the sentence at 40 s instead of clipping its first word.
+    assert warning is None and len(cuts) == 1 and cuts[0].source == "ai" and cuts[0].in_seconds == 40 and cuts[0].out_seconds == 80
     assert cuts[0].lower_third.name == "Priya Kumari" and cuts[0].captions
     sys_prompt, user_prompt, schema = good.calls[0]
     assert "CIMAGE" in sys_prompt and "00:00:30" in user_prompt and "rule-based" in user_prompt.lower() and schema["properties"]["cuts"]
@@ -259,3 +263,83 @@ def test_build_command_is_deterministic_and_complete(tmp_path: Path):
     assert "-an" in cmd2 and "[a]" not in " ".join(cmd2)
     webm = build_command(spec, t, layout, [_Placed(path="/w/frame.webm", x=0, y=0, loop_video=True)], [], tmp_path / "o.mp4")
     assert "-stream_loop -1 -c:v libvpx-vp9 -i /w/frame.webm" in " ".join(webm)
+
+
+# --------------------------------------------------------------------------------------------
+# cut endings: a reel must stop where the speaker has finished a sentence
+# --------------------------------------------------------------------------------------------
+
+def test_sentence_splitting_survives_abbreviations_and_both_scripts():
+    from services.video_composer.captions import split_clauses, split_sentences
+
+    # "Dr." and "B.C.A." used to end a sentence, which produced one-word captions and cuts that
+    # stopped in the middle of a name.
+    assert split_sentences("Dr. Neeraj Agrawal Sir welcomed us. The B.C.A. batch scored 9.5 CGPA.") == [
+        "Dr. Neeraj Agrawal Sir welcomed us.", "The B.C.A. batch scored 9.5 CGPA."]
+    assert split_sentences("सीमेज सिर्फ एक कॉलेज नहीं है। यह एक विजन है।") == [
+        "सीमेज सिर्फ एक कॉलेज नहीं है।", "यह एक विजन है।"]
+    # speech that arrives with no sentence punctuation at all still yields clause boundaries
+    assert len(split_sentences("सीमेज एक विजन है और हम बिहार में स्टैंडर्ड ला रहे हैं")) == 1
+    assert len(split_clauses("सीमेज एक विजन है और हम बिहार में स्टैंडर्ड ला रहे हैं")) == 2
+
+
+def test_every_proposed_cut_ends_on_a_sentence_end():
+    from services.video_composer.captions import sentence_spans
+    from services.video_composer.cuts import Edges
+
+    a = analysis()
+    duration = 120.0
+    stops = {round(e, 2) for seg in a.transcript for _s, e, _t in sentence_spans(seg)}
+    edges = Edges(a, None)
+    for c in propose_cuts(a, duration, CutLimits()):
+        assert c.out_seconds in stops or c.out_seconds == duration, f"{c.id} ends at {c.out_seconds}, mid-sentence"
+        assert c.in_seconds in {round(s, 2) for s in edges.starts} or c.in_seconds == 0.0
+
+
+def test_min_and_max_length_adjustments_re_snap_to_a_sentence_end():
+    from services.video_composer.cuts import Edges, _clamp_window
+
+    a = analysis()
+    edges = Edges(a, None)          # full stops at 10.77, 21.54, 30.77, 40, 59.13, 80, 92.08, 120
+    # stretching a too-short window to min_seconds lands on the next full stop, not at in + min_seconds
+    lim = CutLimits(min_seconds=8.0, max_seconds=60.0)
+    assert _clamp_window(0.0, 3.0, 120.0, lim, edges=edges) == (0.0, 10.77)
+    # trimming a too-long window pulls back to the last full stop inside max_seconds, not to in + max_seconds
+    lim2 = CutLimits(min_seconds=8.0, max_seconds=25.0)
+    assert _clamp_window(0.0, 100.0, 120.0, lim2, edges=edges) == (0.0, 21.54)
+    # the chosen stop is the one nearest the length we wanted, and always inside the limits
+    assert edges.snap_out(0.0, 28.0, CutLimits(min_seconds=8.0, max_seconds=60.0), 120.0) == 30.77
+
+
+def test_cut_does_not_end_on_a_dangling_conjunction():
+    from services.video_composer.cuts import Edges
+
+    a = analysis(transcript=[
+        {"speaker": "Priya Kumari", "start_time": "00:00:00", "end_time": "00:00:30", "language": "en",
+         "text": "The labs are open till late and the mentors sit with you, and"},
+        {"speaker": "Priya Kumari", "start_time": "00:00:30", "end_time": "00:00:40", "language": "en",
+         "text": "that is why I tell every junior to join the coding club."},
+    ])
+    edges = Edges(a, None)
+    # the first segment trails off on "and", so 30 s is not offered as a full stop and the window runs
+    # on to the real one at the end of the following sentence
+    assert 30.0 not in edges.ends and 30.0 in edges.open_ends
+    assert edges.snap_out(0.0, 30.0, CutLimits(min_seconds=8.0, max_seconds=60.0), 40.0) == 40.0
+
+
+def test_measured_transcript_places_cuts_in_the_silence():
+    from services.transcribe.model import Sentence, Transcript, Word
+    from services.video_composer.cuts import Edges
+
+    def sent(i, text, a, b):
+        toks = text.split()
+        step = (b - a) / len(toks)
+        return Sentence(i=i, text=text, start=a, end=b,
+                        words=[Word(w=w, start=round(a + k * step, 3), end=round(a + (k + 1) * step - 0.02, 3)) for k, w in enumerate(toks)])
+
+    t = Transcript(job_id="j", seconds=50.0, silences=[(19.0, 19.9), (33.0, 33.8)],
+                   sentences=[sent(0, "CIMAGE ने मेरी ज़िंदगी बदल दी।", 10.0, 19.0), sent(1, "मुझे Wipro में placement मिला।", 20.0, 33.0)])
+    edges = Edges(analysis(), t)
+    out = edges.snap_out(10.0, 26.0, CutLimits(min_seconds=8.0, max_seconds=60.0), 50.0)   # mid-sentence request
+    assert 33.0 <= out <= 33.8, out                 # ends at the full stop, inside the measured quiet
+    assert edges.snap_in(21.0) == pytest.approx(19.9, abs=0.2)   # starts in the quiet before the first word

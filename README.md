@@ -90,7 +90,7 @@ data/               uploads/, jobs/, analyses/, nas-test/   (git-ignored)
 - `thinking_level` accepts low | medium | high (no `minimal`).
 - 250K TPM means a ~1-hour video at medium resolution (~325K tokens) needs the paid tier or low resolution.
 - Paid tier: 3.5 Flash Lite $0.30 / $2.50 per 1M tokens (≈ ₹1 per short clip, ≈ ₹14 per hour of video); data not used for training.
-- **Prompts are versioned** (`prompts/video-analysis/v1.md`, `v2.md`, `people_v1.md`); old versions are kept for A/B runs (`scripts/analyze.py --prompt v1`). Default `PROMPT_VERSION=v2`.
+- **Prompts are versioned** (`prompts/video-analysis/v1.md`, `v2.md`, `v3.md`, `people_v1.md`); old versions are kept for A/B runs (`scripts/analyze.py --prompt v1`). Default `PROMPT_VERSION=v3` — v3 requires a punctuated transcript whose segments break on sentence ends, which is what the reel cutter snaps its in/out points to.
 - **People**: a focused second pass (`PEOPLE_PASS_VERSION=people_v1`) identifies people against `prompts/known_people.txt`. Names from the screen/speech get `identified_by` on_screen/spoken; recognised people (roster or public figures) get `recognised` with confidence ≤ 0.7; unnamed speakers get `unnamed`. On Flash Lite the single-pass extraction found the Director in 1 of 4 runs; the focused pass found him in 3 of 3.
 - **Transcript guard**: if the transcript is implausibly coarse (< 1 segment per 60 s) the engine re-runs once and keeps the better result; still-coarse results are flagged in `warnings`.
 - Timeouts are per call type: analysis 1800 s, upload chunk 600 s, status polls 30 s with retries (a dropped poll must never hang a job).
@@ -215,9 +215,10 @@ Flex + Google Sans Code + Material Symbols from Google Fonts (inline-SVG icon fa
 "needs your attention"), Videos (analyse via upload / YouTube URL / NAS path, library, per-video blocks), Search (hybrid /
 semantic / keyword), Opportunities, Review drafts (read, pictures & photo library, SEO/social, evidence, edit, versions,
 approve / needs changes / reject; `#drafts/<id>` deep-links), Reels studio (the composer: cuts, framing, captions, renders),
-Folder watcher, Activity log. The old stand-alone pages (`/`, `/content`, `/composer`) redirect into their sections; their
-files are kept under `web/_legacy/` and are not served. Data: `apps/api/admin_routes.py` (`/admin/overview`, `/watcher*`,
-`/audit`) plus the existing routers. Deployment: `docs/DEPLOY.md`.
+Folder watcher, Prompts, Settings (transcription + reel-cut lengths, saved live), Activity log. The old stand-alone
+pages (`/`, `/content`, `/composer`) redirect into their sections; their files are kept under `web/_legacy/` and are not
+served. Data: `apps/api/admin_routes.py` (`/admin/overview`, `/watcher*`, `/audit`) and `apps/api/settings_routes.py`
+(`/settings`) plus the existing routers. Deployment: `docs/DEPLOY.md`.
 
 ## Publishing to WordPress (V1.0)
 

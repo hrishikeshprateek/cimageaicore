@@ -293,7 +293,8 @@ def job_cuts(request: Request, ctx: Ctx, job_id: str, refine: bool | None = None
             duration = ff.probe(Path(job.source.path)).duration
         except ff.FFmpegError:
             duration = None
-    cuts = propose_cuts(analysis, duration, ctx.limits())
+    measured = _measured_transcript(request, job_id)
+    cuts = propose_cuts(analysis, duration, ctx.limits(), transcript=measured)
     warning = None
     refined = False
     want = ctx.settings.cuts_refine == "auto" if refine is None else refine
@@ -302,9 +303,23 @@ def job_cuts(request: Request, ctx: Ctx, job_id: str, refine: bool | None = None
         reg = getattr(request.app.state, "prompts", None)
         cuts, warning = refine_with_ai(provider, analysis, duration, cuts, lim=ctx.limits(),
                                        prompt_version=reg.active("cuts") if reg else ctx.settings.cuts_prompt_version,
-                                       institution_context=reg.institution_context if reg else get_settings().institution_context)
+                                       institution_context=reg.institution_context if reg else get_settings().institution_context,
+                                       transcript=measured)
         refined = warning is None
     return CutsResponse(job_id=job_id, duration_seconds=duration, refined=refined, warning=warning, cuts=cuts)
+
+
+def _measured_transcript(request: Request, job_id: str):
+    """The job's measured transcript (real word times + silences) when it has been transcribed - cuts then
+    land on sentence boundaries inside the quiet instead of on times estimated from the analysis blocks."""
+    store = getattr(request.app.state, "transcripts", None)
+    if store is None:
+        return None
+    try:
+        return store.get(job_id)
+    except Exception:  # noqa: BLE001 - a missing or unreadable transcript just means "estimate it"
+        log.debug("no measured transcript for %s", job_id)
+        return None
 
 
 @router.get("/api/v1/jobs/{job_id}/captions")

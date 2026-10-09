@@ -59,7 +59,7 @@ class Settings(BaseSettings):
         "CIMAGE Group of Institutions, Patna, Bihar, India - a college offering "
         "BBA, BCA, MBA/PGDM and related programmes."
     )
-    prompt_version: str = "v2"   # prompts/video-analysis/<version>.md - old versions are kept for comparison
+    prompt_version: str = "v3"   # prompts/video-analysis/<version>.md - old versions are kept for comparison
     known_people_file: Path = REPO_ROOT / "prompts" / "known_people.txt"
     people_pass_version: str = "people_v1"   # blank disables the focused people pass
 
@@ -80,8 +80,17 @@ class Settings(BaseSettings):
     whisper_model: str = "large-v3-turbo"  # best Hindi/Hinglish of the fast models; 'medium' is lighter, 'tiny' for smoke tests
     whisper_device: str = "auto"
     whisper_compute_type: str = "int8"     # int8 on CPU; float16 on a GPU box
-    whisper_language: str = ""             # blank = detect (needed for Hindi/English mixes)
+    whisper_language: str = "hi"           # Whisper decodes ONE language per window - it has no code-switching mode.
+                                           # For Hindi/English mixes pin 'hi' (it keeps the English words and punctuates
+                                           # both scripts); blank re-detects per file and the script then flips between runs.
     whisper_threads: int = 0               # 0 = let CTranslate2 decide
+    whisper_carry_context: bool = True     # condition each window on the previous text: this is what produces full stops
+    # Whisper imitates the style of this sample, so it is written the way the transcript should come out:
+    # both scripts, every sentence closed (danda in Devanagari, full stop in English), institution names spelled right.
+    whisper_initial_prompt: str = ("CIMAGE कॉलेज, पटना में BCA, BBA और BSc-IT की पढ़ाई होती है। "
+                                   "डॉ. नीरज अग्रवाल सर ने कहा कि यह सिर्फ एक कॉलेज नहीं, एक vision है। "
+                                   "Our students get placement in top IT companies, and the faculty is very supportive.")
+    whisper_sentence_gap: float = 0.6       # silence that ends a sentence; Hindi speakers breathe mid-sentence
     transcribe_on_analysis: bool = True    # every analysed video gets its word timings right away
 
     # ---- voiceover (script -> spoken audio -> laid over the rendered video)
@@ -165,6 +174,11 @@ class Settings(BaseSettings):
     @property
     def watcher_config_file(self) -> Path:
         return self.data_dir / "watcher_config.json"
+
+    @property
+    def runtime_settings_file(self) -> Path:
+        """Settings the admin UI owns (transcription + cut lengths); unset keys fall back to .env."""
+        return self.data_dir / "runtime_settings.json"
 
     @property
     def watch_roots_resolved(self) -> list[Path]:

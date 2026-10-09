@@ -15,8 +15,9 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from services.block_engine.media import seconds_to_ts, ts_to_seconds
-from services.block_engine.schemas import KeyMomentBlock, PersonBlock, QuoteBlock, TranscriptSegment, VideoAnalysisV1, provider_json_schema
-from services.video_composer.captions import CaptionCue, cues_for_window, is_generic_speaker, sentence_spans
+from services.block_engine.schemas import KeyMomentBlock, PersonBlock, VideoAnalysisV1, provider_json_schema
+from services.transcribe.model import Transcript, is_trailing_stopword, token_closes_sentence
+from services.video_composer.captions import CaptionCue, clause_spans, cues_for_window, is_generic_speaker, sentence_spans
 from services.video_composer.renderer import LowerThird
 
 log = logging.getLogger(__name__)
@@ -62,51 +63,112 @@ def _norm_name(s: str) -> str:
     return re.sub(r"[^a-z0-9ऀ-ॿ]+", " ", s.lower()).strip()
 
 
-def _segment_at(segments: list[TranscriptSegment], t: float) -> tuple[float, float, TranscriptSegment] | None:
-    best = None
-    for seg in segments:
-        s, e = ts_to_seconds(seg.start_time), ts_to_seconds(seg.end_time)
-        if s is None or e is None:
-            continue
-        if s <= t <= max(e, s + 1):
-            return float(s), float(max(e, s + 1)), seg
-        if best is None or abs(s - t) < abs(best[0] - t):
-            best = (float(s), float(max(e, s + 1)), seg)
-    return best
+def _trails_off(text: str) -> bool:
+    """Does this piece of speech end on a conjunction, or with no full stop at all? Ending a reel
+    there sounds interrupted."""
+    words = text.split()
+    return not words or is_trailing_stopword(words[-1]) or not token_closes_sentence(words[-1])
 
 
-def _snap_in(seg: TranscriptSegment | None, t: float, *, default_lead: float = 4.0, max_lead: float = 12.0) -> float:
-    """Start at the (estimated) beginning of the sentence that contains `t`, if that is not too far back."""
-    starts = [s for s, _, _ in sentence_spans(seg)] if seg else []
-    before = [s for s in starts if s <= t + 0.5]
-    if before and t - max(before) <= max_lead:
-        return max(before)
-    return t - default_lead
+class Edges:
+    """Where a cut is allowed to begin and end.
+
+    Built from the *measured* transcript when the job has one (real word times, measured silences, and
+    sentences that know whether they trail off), and from the analysis transcript's estimated sentence
+    spans otherwise. Three pools, best first: `ends` are full stops - the speaker has finished a thought;
+    `clauses` are clause ends inside speech that arrived with no punctuation at all; `open_ends` are
+    sentences that hang on a conjunction ("...aur", "...and"), which is where a reel sounds interrupted
+    and is therefore only used when there is nothing else inside the allowed length.
+    """
+
+    def __init__(self, analysis: VideoAnalysisV1, transcript: Transcript | None = None):
+        self.tr = transcript if transcript is not None and transcript.sentences else None
+        starts: list[float] = []
+        ends: list[float] = []
+        clauses: list[float] = []
+        open_ends: list[float] = []
+        self.spans: list[tuple[float, float]] = []    # (start, end) of every sentence that closes properly
+        if self.tr is not None:
+            for s in self.tr.sentences:
+                starts.append(s.start)
+                if s.ends_open():
+                    open_ends.append(s.end)
+                else:
+                    ends.append(s.end)
+                    self.spans.append((s.start, s.end))
+        else:
+            for seg in analysis.transcript:
+                spans = sentence_spans(seg)
+                for a, b, text in spans:
+                    starts.append(a)
+                    if _trails_off(text):
+                        open_ends.append(b)
+                    else:
+                        ends.append(b)
+                        self.spans.append((a, b))
+                if len(spans) <= 1:       # unpunctuated speech: clause ends are all we have
+                    clauses += [b for _a, b, _t in clause_spans(seg)]
+        self.starts, self.ends, self.clauses, self.open_ends = (sorted(set(starts)), sorted(set(ends)),
+                                                                sorted(set(clauses)), sorted(set(open_ends)))
+
+    # ------------------------------------------------------------------ in
+    def snap_in(self, t: float, *, default_lead: float = 4.0, max_lead: float = 12.0) -> float:
+        """Begin where the sentence containing `t` begins, if that is not too far back."""
+        before = [s for s in self.starts if s <= t + 0.5]
+        at = max(before) if before and t - max(before) <= max_lead else t - default_lead
+        at = max(0.0, at)
+        return self.tr.snap_in(at) if self.tr is not None else round(at, 2)
+
+    # ------------------------------------------------------------------ out
+    def snap_out(self, t_in: float, want: float, lim: CutLimits, duration: float | None = None, *, floor: float | None = None) -> float:
+        """The end of the cut: the boundary closest to `want` that keeps the reel between `min_seconds`
+        and `max_seconds`. A full stop always beats a clause end, which always beats a dangling
+        conjunction - so the speaker finishes what they were saying. `floor` is the time the material
+        this cut exists to show finishes at: the end never lands before it."""
+        lo, hi = t_in + lim.min_seconds, t_in + lim.max_seconds
+        if floor is not None:
+            lo = max(lo, floor)
+        if duration is not None:
+            hi = min(hi, duration)
+        if hi <= lo:
+            return round(hi, 2)
+        # a request that falls inside a sentence is a request to hear that sentence out
+        holding = [e for s, e in self.spans if s - 0.25 <= want <= e + 0.25 and lo <= e <= hi]
+        if holding:
+            return self._place(min(holding))
+        for pool in (self.ends, self.clauses, self.open_ends):
+            inside = [b for b in pool if lo <= b <= hi]
+            if inside:
+                return self._place(min(inside, key=lambda b: abs(b - want)))
+        # Nothing to snap to. If the window already reaches the end of the footage, end there: the video
+        # stops, so nobody is interrupted. (Estimated sentence spans routinely run past the real duration.)
+        if duration is not None and hi >= duration - 0.05:
+            return round(duration, 2)
+        return round(min(max(want, lo), hi), 2)
+
+    def _place(self, t: float) -> float:
+        """Put the chosen boundary inside the measured silence after the last word, when we have one."""
+        return self.tr.snap_out(t) if self.tr is not None else round(t, 2)
 
 
-def _snap_out(seg: TranscriptSegment | None, t_end: float, *, max_tail: float = 8.0) -> float:
-    """End at the (estimated) end of the sentence that contains `t_end`, if that is not too far ahead."""
-    ends = [e for _, e, _ in sentence_spans(seg)] if seg else []
-    after = [e for e in ends if e >= t_end - 0.5]
-    if after and min(after) - t_end <= max_tail:
-        return min(after)
-    return t_end
-
-
-def _clamp_window(t_in: float, t_out: float, duration: float | None, lim: CutLimits, *, must_include: tuple[float, float] | None = None) -> tuple[float, float]:
-    """Enforce min/max length and the video bounds while keeping `must_include` inside if possible."""
+def _clamp_window(t_in: float, t_out: float, duration: float | None, lim: CutLimits, *, must_include: tuple[float, float] | None = None,
+                  edges: Edges | None = None) -> tuple[float, float]:
+    """Enforce the video bounds and the length limits. Any change to the out point goes back through
+    `Edges.snap_out`, so stretching a short cut or trimming a long one still ends on a sentence end -
+    doing that arithmetically is what used to leave reels stopping mid-word."""
     if duration is not None:
         t_in, t_out = max(0.0, min(t_in, duration)), max(0.0, min(t_out, duration))
-    if t_out - t_in < lim.min_seconds:
-        t_out = t_in + lim.min_seconds
+    if t_out - t_in > lim.max_seconds and must_include:
+        a, b = must_include
+        t_in = max(t_in, min(a - 3.0, b - lim.max_seconds + 1.0))
+    if not (lim.min_seconds <= t_out - t_in <= lim.max_seconds):
+        if edges is not None:
+            t_out = edges.snap_out(t_in, t_out, lim, duration)
+        else:
+            t_out = t_in + min(max(t_out - t_in, lim.min_seconds), lim.max_seconds)
         if duration is not None and t_out > duration:
             t_out = duration
-            t_in = max(0.0, t_out - lim.min_seconds)
-    if t_out - t_in > lim.max_seconds:
-        if must_include:
-            a, b = must_include
-            t_in = max(t_in, min(a - 3.0, b - lim.max_seconds + 1.0))
-        t_out = t_in + lim.max_seconds
+            t_in = max(0.0, min(t_in, t_out - lim.min_seconds))
     return round(t_in, 2), round(t_out, 2)
 
 
@@ -149,9 +211,13 @@ def _finish(pid: str, title: str, t_in: float, t_out: float, source: str, score:
     )
 
 
-def propose_cuts(analysis: VideoAnalysisV1, duration: float | None, lim: CutLimits | None = None) -> list[CutProposal]:
+def propose_cuts(analysis: VideoAnalysisV1, duration: float | None, lim: CutLimits | None = None,
+                 transcript: Transcript | None = None) -> list[CutProposal]:
+    """Propose reel windows. With a measured `transcript` the in/out points land on real sentence
+    boundaries inside the measured silences; without one they fall back to estimated sentence spans."""
     lim = lim or CutLimits()
     segs = analysis.transcript
+    edges = Edges(analysis, transcript)
     proposals: list[CutProposal] = []
 
     def moments_in(a: float, b: float) -> list[KeyMomentBlock]:
@@ -166,11 +232,9 @@ def propose_cuts(analysis: VideoAnalysisV1, duration: float | None, lim: CutLimi
             continue
         words = len(q.text.split())
         q_dur = max(2.0, words / WORDS_PER_SECOND + 0.8)
-        seg = _segment_at(segs, t)
-        inside = seg is not None and seg[0] <= t <= seg[1]
-        t_in = _snap_in(seg[2] if inside else None, t)
-        t_out = _snap_out(seg[2] if inside else None, t + q_dur + 1.0)
-        t_in, t_out = _clamp_window(t_in, t_out, duration, lim, must_include=(t, t + q_dur))
+        t_in = edges.snap_in(t)
+        t_out = edges.snap_out(t_in, t + q_dur + 1.0, lim, duration, floor=t + q_dur)
+        t_in, t_out = _clamp_window(t_in, t_out, duration, lim, must_include=(t, t + q_dur), edges=edges)
         score = 1.0
         mom = moments_in(t_in, t_out)
         if mom:
@@ -191,11 +255,9 @@ def propose_cuts(analysis: VideoAnalysisV1, duration: float | None, lim: CutLimi
         t = ts_to_seconds(k.timestamp)
         if t is None or (duration is not None and t > duration + 2):
             continue
-        seg = _segment_at(segs, t)
-        inside = seg is not None and seg[0] <= t <= seg[1]
-        t_in = _snap_in(seg[2] if inside else None, t, default_lead=3.0)
-        t_out = _snap_out(seg[2] if inside else None, t + lim.target_seconds * 0.6)
-        t_in, t_out = _clamp_window(t_in, t_out, duration, lim, must_include=(t, t + 3))
+        t_in = edges.snap_in(t, default_lead=3.0)
+        t_out = edges.snap_out(t_in, t + lim.target_seconds * 0.6, lim, duration, floor=t + 3.0)
+        t_in, t_out = _clamp_window(t_in, t_out, duration, lim, must_include=(t, t + 3), edges=edges)
         speaker = next((s.speaker for s in segs if (ts_to_seconds(s.start_time) or 1e9) <= t <= (ts_to_seconds(s.end_time) or -1)), None)
         score = 0.6 + _IMPORTANCE[k.importance]
         proposals.append(_finish(f"k{i}", k.description, t_in, t_out, "key_moment", score, f"{k.importance} key moment at {k.timestamp}",
@@ -207,11 +269,13 @@ def propose_cuts(analysis: VideoAnalysisV1, duration: float | None, lim: CutLimi
         for i, (s0, e0, seg) in enumerate(ranked[:3]):
             if s0 is None or e0 is None:
                 continue
-            t_in, t_out = _clamp_window(float(s0), min(float(e0), s0 + lim.target_seconds), duration, lim)
+            a_in = edges.snap_in(float(s0), default_lead=0.0)
+            t_in, t_out = _clamp_window(a_in, edges.snap_out(a_in, min(float(e0), s0 + lim.target_seconds), lim, duration),
+                                        duration, lim, edges=edges)
             proposals.append(_finish(f"t{i}", seg.text, t_in, t_out, "transcript", 0.3, f"speaker turn by {seg.speaker} at {seg.start_time}",
                                      hook=None, speaker=seg.speaker, analysis=analysis, lim=lim))
     if not proposals and duration:
-        t_in, t_out = _clamp_window(0.0, min(duration, lim.target_seconds), duration, lim)
+        t_in, t_out = _clamp_window(0.0, edges.snap_out(0.0, min(duration, lim.target_seconds), lim, duration), duration, lim, edges=edges)
         proposals.append(_finish("t0", "Opening", t_in, t_out, "transcript", 0.1, "no quotes, key moments or transcript - opening of the video",
                                  hook=None, speaker=None, analysis=analysis, lim=lim))
 
@@ -274,11 +338,16 @@ def _blocks_digest(analysis: VideoAnalysisV1, duration: float | None) -> str:
 
 
 def refine_with_ai(provider, analysis: VideoAnalysisV1, duration: float | None, rule_based: list[CutProposal], *, lim: CutLimits | None = None,
-                   prompt_version: str = "cuts_v1", institution_context: str = "") -> tuple[list[CutProposal], str | None]:
-    """Ask the gateway for better windows. Returns (cuts, warning). Never raises: falls back to `rule_based`."""
+                   prompt_version: str = "cuts_v1", institution_context: str = "",
+                   transcript: Transcript | None = None) -> tuple[list[CutProposal], str | None]:
+    """Ask the gateway for better windows. Returns (cuts, warning). Never raises: falls back to `rule_based`.
+
+    The model's in/out times are snapped to sentence boundaries exactly like the rule-based ones - it
+    reasons about content, not about where a syllable ends."""
     from services.ai_gateway.base import ProviderError
 
     lim = lim or CutLimits()
+    edges = Edges(analysis, transcript)
     try:
         system, user = load_prompt(prompt_version)
         values = {
@@ -301,7 +370,8 @@ def refine_with_ai(provider, analysis: VideoAnalysisV1, duration: float | None, 
         a, b = ts_to_seconds(c.in_time), ts_to_seconds(c.out_time)
         if a is None or b is None or b <= a:
             continue
-        a, b = _clamp_window(float(a), float(b), duration, lim)
+        a = edges.snap_in(float(a), default_lead=0.0)
+        a, b = _clamp_window(a, edges.snap_out(a, float(b), lim, duration), duration, lim, edges=edges)
         speaker = c.lower_third_name
         p = _finish(f"ai{i}", c.title, a, b, "ai", 2.0 - i * 0.1, c.reason, hook=c.hook_line, speaker=speaker, analysis=analysis, lim=lim)
         if c.lower_third_name:

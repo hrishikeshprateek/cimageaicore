@@ -15,9 +15,44 @@ from pydantic import BaseModel, Field
 
 from services.block_engine.media import ts_to_seconds
 from services.block_engine.schemas import TranscriptSegment
+from services.transcribe.model import token_closes_sentence
 
-_SENTENCE_END = re.compile(r"(?<=[।.!?॥])\s+")
 _GENERIC_SPEAKER = re.compile(r"^(speaker\s*\d*|audience|voice-?over|narrator|unknown|host|interviewer)$", re.IGNORECASE)
+
+# Sentence detection. Devanagari danda/double-danda always end a sentence; Latin ./!/? only when the
+# token before them is not an abbreviation or a set of initials, which Hindi-English speech is full of
+# ("Dr. Neeraj", "B.C.A.", "Smt. Sinha") and which a bare /[.!?]\s+/ split turns into false sentences.
+_TERMINATOR = re.compile(r"([।॥]|[.!?…]+)(\s+|$)")
+# Clause boundaries: used only when a segment carries no sentence punctuation at all (the usual Gemini
+# output for spoken Hindi) so the cut planner still has somewhere safe to end instead of mid-phrase.
+_CLAUSE = re.compile(r"(?<=[,;:])\s+|\s+(?=(?:और|लेकिन|क्योंकि|तो|फिर|जब|अगर|कि)\s)|\s+(?=(?:and|but|because|so|then|which|where|while)\s)")
+_WORDS_PER_SECOND = 2.4
+
+
+def split_sentences(text: str) -> list[str]:
+    """Sentences in `text`, keeping their terminators. Abbreviation-aware (see `_ends_sentence`)."""
+    text = " ".join(text.split())
+    if not text:
+        return []
+    out, start = [], 0
+    for m in _TERMINATOR.finditer(text):
+        last_word = (text[start:m.end(1)].split() or [""])[-1]
+        if not token_closes_sentence(last_word):
+            continue
+        piece = text[start:m.end(1)].strip()
+        if piece:
+            out.append(piece)
+        start = m.end()
+    tail = text[start:].strip()
+    if tail:
+        out.append(tail)
+    return out
+
+
+def split_clauses(text: str) -> list[str]:
+    """Clause-level pieces - the fallback when speech arrives with no sentence punctuation."""
+    text = " ".join(text.split())
+    return [x.strip() for x in _CLAUSE.split(text) if x and x.strip()]
 
 
 class CaptionCue(BaseModel):
@@ -41,7 +76,7 @@ def chunk_text(text: str, max_chars: int) -> list[str]:
     if not text:
         return []
     chunks: list[str] = []
-    for sentence in _SENTENCE_END.split(text):
+    for sentence in split_sentences(text):
         words = sentence.split()
         cur = ""
         for w in words:
@@ -69,20 +104,30 @@ def _seg_bounds(seg: TranscriptSegment) -> tuple[float, float] | None:
     return float(s), float(e)
 
 
-def sentence_spans(seg: TranscriptSegment) -> list[tuple[float, float, str]]:
-    """Estimated (start, end, text) of each sentence in a segment - time is split in proportion to length."""
+def _spans(seg: TranscriptSegment, pieces: list[str]) -> list[tuple[float, float, str]]:
+    """Give each piece of a segment a time, split in proportion to its length."""
     b = _seg_bounds(seg)
-    if b is None:
+    if b is None or not pieces:
         return []
     s, e = b
-    sentences = [x for x in _SENTENCE_END.split(" ".join(seg.text.split())) if x]
-    total = sum(len(x) for x in sentences) or 1
+    total = sum(len(x) for x in pieces) or 1
     out, t = [], s
-    for x in sentences:
+    for x in pieces:
         d = (e - s) * len(x) / total
         out.append((round(t, 2), round(t + d, 2), x))
         t += d
     return out
+
+
+def sentence_spans(seg: TranscriptSegment) -> list[tuple[float, float, str]]:
+    """Estimated (start, end, text) of each sentence in a segment - time is split in proportion to length."""
+    return _spans(seg, split_sentences(" ".join(seg.text.split())))
+
+
+def clause_spans(seg: TranscriptSegment) -> list[tuple[float, float, str]]:
+    """Clause-level spans, for segments that arrive with no sentence punctuation at all: a clause end is
+    a far better place to end a reel than an arbitrary point mid-phrase."""
+    return _spans(seg, split_clauses(" ".join(seg.text.split())))
 
 
 def cues_for_window(segments: Iterable[TranscriptSegment], cut_in: float, cut_out: float, *, max_chars_per_line: int = 34,

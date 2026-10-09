@@ -42,7 +42,7 @@ class Kind:
 
 
 KINDS: dict[str, Kind] = {k.key: k for k in (
-    Kind("video-analysis", "Video analysis", "video-analysis", "v", "v2", "every video: watch → knowledge blocks (BlockEngine)",
+    Kind("video-analysis", "Video analysis", "video-analysis", "v", "v3", "every video: watch → knowledge blocks (BlockEngine)",
          ("institution_context", "known_people", "source_name")),
     Kind("people-pass", "People pass", "video-analysis", "people_", "people_v1", "second pass that names the people in a video against the roster",
          ("institution_context", "known_people", "source_name")),

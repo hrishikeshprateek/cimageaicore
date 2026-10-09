@@ -37,6 +37,7 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.setenv("TTS_PROVIDER", "mock")
     monkeypatch.setenv("TRANSCRIBE_PROVIDER", "mock")   # no model download in tests         # a test must never spend voice credits, whatever the build ships with
     monkeypatch.setenv("EMBEDDING_MODEL", "auto")
+    monkeypatch.setenv("PROMPT_VERSION", "v3")          # never the developer's .env choice: the active prompt is asserted below
     monkeypatch.setenv("WATCHER_ENABLED", "false")      # tests drive the watcher explicitly
     monkeypatch.setenv("AUTO_DRAFT", "false")
     monkeypatch.setenv("DATABASE_URL", "")

@@ -9,6 +9,34 @@ from pydantic import BaseModel, Field
 # A sentence ends here. Devanagari danda, and the usual Latin stops; a comma never ends a sentence.
 _ENDERS = "।॥.?!…"
 _SENTENCE_END = re.compile(rf"[{re.escape(_ENDERS)}]+[\"'”’)\]]*$")
+# ...but a lone "." often belongs to an abbreviation or a set of initials, which Hindi-English speech is
+# full of ("Dr. Neeraj", "B.C.A.", "Smt. Sinha"). Treating those as sentence ends is what produced
+# one-word "sentences" and cuts that stop in the middle of a name.
+ABBREVIATIONS = {
+    "dr", "mr", "mrs", "ms", "prof", "sr", "jr", "st", "smt", "shri", "sri", "md", "er", "capt", "col", "gen",
+    "hon", "rev", "adv", "no", "nos", "vs", "etc", "eg", "ie", "ltd", "pvt", "co", "inc", "approx", "dept",
+    "govt", "univ", "fig", "vol", "pp", "am", "pm", "ph", "sec", "min", "hrs",
+}
+INITIALS = re.compile(r"^(?:[A-Za-z]\.)+[A-Za-z]?\.?$")
+
+
+def token_closes_sentence(token: str) -> bool:
+    """Does this word end a sentence? True for a danda / ! / ? / ellipsis, and for "." unless the word is
+    an abbreviation or initials."""
+    token = token.strip()
+    if not _SENTENCE_END.search(token):
+        return False
+    stripped = token.rstrip("\"'”’)]")
+    if not stripped.endswith("."):
+        return True                      # danda, "!", "?", "..." - never an abbreviation
+    if INITIALS.match(stripped):
+        return False
+    return stripped.rstrip(".").lower() not in ABBREVIATIONS
+
+
+def is_trailing_stopword(token: str) -> bool:
+    """A word a sentence must not be left hanging on - the clip would sound unfinished."""
+    return token.strip().strip(_ENDERS + ",;:\"'”’").lower() in TRAILING_STOPWORDS
 # Words that must not be left dangling at the end of a cut, or lead it - the clip would sound unfinished.
 TRAILING_STOPWORDS = {"और", "लेकिन", "क्योंकि", "तो", "कि", "जो", "पर", "फिर", "अगर", "या",
                       "and", "but", "because", "so", "that", "which", "if", "or", "then", "when", "while", "with", "the", "a", "an"}
@@ -35,9 +63,10 @@ class Sentence(BaseModel):
         return round(self.end - self.start, 3)
 
     def ends_open(self) -> bool:
-        """True when the sentence trails off on a conjunction - cutting here sounds interrupted."""
-        last = (self.words[-1].w if self.words else self.text.split()[-1] if self.text.split() else "").strip(_ENDERS + ",;:\"'")
-        return last.lower() in TRAILING_STOPWORDS
+        """True when the sentence trails off on a conjunction, or has no closing punctuation at all -
+        cutting here sounds interrupted."""
+        last = (self.words[-1].w if self.words else self.text.split()[-1] if self.text.split() else "")
+        return is_trailing_stopword(last) or not token_closes_sentence(last)
 
     def starts_with_filler(self) -> bool:
         first = (self.words[0].w if self.words else self.text.split()[0] if self.text.split() else "").strip(_ENDERS + ",;:\"'")
@@ -121,8 +150,13 @@ class Transcript(BaseModel):
         return self.snap_in(a.start, pad=pad_in), self.snap_out(b.end, pad=pad_out)
 
 
-def sentences_from_words(words: list[Word], *, max_gap: float = 0.45, max_seconds: float = 9.0, min_words: int = 2) -> list[Sentence]:
-    """Group words into sentences: punctuation first, then a long pause, then a hard length cap."""
+def sentences_from_words(words: list[Word], *, max_gap: float = 0.6, max_seconds: float = 12.0, min_words: int = 2) -> list[Sentence]:
+    """Group words into sentences: punctuation first, then a long pause, then a hard length cap.
+
+    A pause alone is weak evidence in Hindi and Hinglish speech - speakers breathe mid-sentence and
+    pause *before* a conjunction, so a run that currently hangs on one ("...aur", "...लेकिन") needs a
+    much longer silence before we accept it as a sentence end.
+    """
     out: list[Sentence] = []
     buf: list[Word] = []
 
@@ -150,9 +184,10 @@ def sentences_from_words(words: list[Word], *, max_gap: float = 0.45, max_second
     for i, w in enumerate(words):
         buf.append(w)
         nxt = words[i + 1] if i + 1 < len(words) else None
-        ends = bool(_SENTENCE_END.search(w.w.strip()))
+        ends = token_closes_sentence(w.w)
         pause = (nxt.start - w.end) if nxt else 99.0
-        if (ends and len(buf) >= min_words) or pause >= max_gap:
+        needed = max_gap * 2.5 if is_trailing_stopword(w.w) else max_gap
+        if (ends and len(buf) >= min_words) or pause >= needed:
             flush()
         elif buf and (w.end - buf[0].start) >= max_seconds:
             flush_long()

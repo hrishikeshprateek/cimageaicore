@@ -35,6 +35,7 @@ from agents.blog_agent.agent import BlogAgent
 from agents.script_agent.agent import ScriptAgent
 from services.tts import build_tts
 from services.transcribe import build_transcriber
+from apps.api.settings_routes import router as settings_router
 from apps.api.transcript_store import build_transcript_store
 from apps.api.timeline_store import build_timeline_store
 
@@ -105,6 +106,12 @@ async def lifespan(app: FastAPI):
     app.state.scripts = scripts
     app.state.script_agent = script_agent
     app.state.tts = build_tts(settings)
+    # settings the admin UI owns (transcription + cut lengths) go on before the transcriber is built
+    from apps.api import runtime_settings as rs
+    from services.video_composer.settings import get_composer_settings
+
+    app.state.runtime_settings = rs.load(settings.runtime_settings_file)
+    rs.apply(app.state.runtime_settings, settings, get_composer_settings())
     app.state.transcriber = build_transcriber(settings)
     app.state.transcripts = build_transcript_store(store, settings.transcripts_dir)
     app.state.timelines = build_timeline_store(store, settings.data_dir / "timelines")
@@ -174,6 +181,7 @@ def create_app() -> FastAPI:
     app.include_router(script_router)
     app.include_router(transcribe_router)
     app.include_router(timeline_router)
+    app.include_router(settings_router)
 
     @app.get("/health", include_in_schema=False)
     def health() -> dict:
