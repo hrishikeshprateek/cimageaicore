@@ -799,3 +799,25 @@ html.rail .nav a.item .badge{position:absolute;top:4px;right:6px;min-width:16px;
 }
 /* 4K at 100% OS scaling (a 43-48" TV as a wall dashboard) is legible only with OS display scaling (150%) or browser zoom
    (Ctrl +, remembered per site) - both keep 100vh/pointer maths correct, which CSS `zoom` does not. */
+
+/* ---- where speech actually ends, drawn on the edit ------------------------------------------------
+   Ticks are the measured sentence ends inside a clip; a cutmark flags an edge that stops part-way
+   through one (the thing that made reels sound interrupted). Both are decoration: pointer-events off
+   so they never steal a drag from the trim handles. */
+.trk .cl .snt{position:absolute;bottom:0;width:1px;height:7px;background:rgba(255,255,255,.5);z-index:2;pointer-events:none}
+.trk .cl.sel .snt{background:rgba(255,255,255,.75);height:9px}
+.trk .cl .cutmark{position:absolute;top:0;bottom:0;width:3px;z-index:2;pointer-events:none;background:var(--sx-amber,#e8b55f);
+  box-shadow:0 0 7px rgba(232,181,95,.85)}
+.trk .cl .cutmark.l{left:0}
+.trk .cl .cutmark.r{right:0}
+.trk .cl .cutmark.open{background:#f0888a;box-shadow:0 0 7px rgba(240,136,138,.85)}
+.trk .cl.cuts{box-shadow:inset 0 0 0 1px rgba(232,181,95,.55)}
+.trk .cl.cuts.sel{box-shadow:inset 0 0 0 2px var(--sx-amber,#e8b55f),inset 0 -3px 0 var(--tone,#4f9cf9),0 6px 18px rgba(0,0,0,.55)}
+
+.edgenote{display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border-radius:7px;font-size:12px;line-height:1.5;
+  background:var(--sx-sunken,#111317);border:1px solid var(--sx-line,#262a31);color:var(--sx-ink-2,#a4abb3)}
+.edgenote b{color:var(--sx-ink,#e9ebee);font-variant-numeric:tabular-nums}
+.edgenote .icn{flex:none;margin-top:1px}
+.edgenote.warn{border-color:#5a4520;background:#231c0f;color:#f0dcb4}
+.edgenote.ok{border-color:#24482f;background:#111e16;color:#b7dcc4}
+.tlbar label.inert{opacity:.5}

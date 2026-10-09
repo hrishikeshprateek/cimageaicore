@@ -12,6 +12,33 @@ const total = () => (TL ? TL.clips.reduce((a, c) => a + c.seconds, 0) : 0);
 const tc = (t) => `${Math.floor(Math.max(0, t) / 60)}:${String(Math.floor(Math.max(0, t) % 60)).padStart(2, '0')}.${Math.floor((Math.max(0, t) % 1) * 10)}`;
 const starts = () => { let a = 0; return TL.clips.map((c) => { const s = a; a += c.seconds; return s; }); };
 const SRC_COLOURS = ['#4f9cf9', '#b388f0', '#5fd0a0', '#e8b55f', '#f0888a', '#66d2e8'];
+const SENT = {};                 // job_id -> /transcript payload; what the ticks and edge warnings are drawn from
+const EDGE_TOL = 0.25;           // an edge this close to a sentence boundary counts as landing on it
+
+async function sentencesFor(jobId, force) {
+  if (!force && SENT[jobId]) return SENT[jobId];
+  try { SENT[jobId] = await api('/jobs/' + jobId + '/transcript'); }
+  catch { SENT[jobId] = { ready: false, status: 'none', sentences: [] }; }
+  return SENT[jobId];
+}
+const loadSentences = (force) => Promise.all((TL ? TL.jobs : []).map((j) => sentencesFor(j, force)));
+
+/** What the clip's edges do to the speech: the sentence each edge cuts through, and whether the last
+ *  sentence the viewer hears trails off on a conjunction. Null when the video has no word timings. */
+function edgeInfo(c) {
+  const t = SENT[c.job_id];
+  if (!t || !t.ready || !t.sentences.length) return null;
+  const S = t.sentences;
+  const through = (x) => S.find((s) => x > s.start + EDGE_TOL && x < s.end - EDGE_TOL) || null;
+  const heard = S.filter((s) => s.end > c.in_seconds + EDGE_TOL && s.start < c.out_seconds - EDGE_TOL);
+  const last = heard[heard.length - 1];
+  return {
+    inCuts: through(c.in_seconds), outCuts: through(c.out_seconds),
+    openEnd: !!(last && last.ends_open), filler: !!(heard[0] && heard[0].starts_with_filler),
+    ends: S.map((s) => s.end), heard,
+  };
+}
+const edgeProblem = (c) => { const e = edgeInfo(c); return e && (e.outCuts || e.inCuts || e.openEnd) ? e : null; };
 const colourOf = (jobId) => SRC_COLOURS[Math.max(0, TL.jobs.indexOf(jobId)) % SRC_COLOURS.length];
 const clipAt = (t) => { const st = starts(); for (let i = TL.clips.length - 1; i >= 0; i--) if (t >= st[i] - 1e-6) return { i, clip: TL.clips[i], start: st[i] }; return null; };
 
@@ -35,6 +62,7 @@ export async function mount(el, { job, jobs, onMode }) {
   }
   draw(); fitZoom(); bindKeys(); pollRenders();
   if (TL.clips.length) { SEL = TL.clips[0].id; drawTimeline(); drawInspector(); }   // open on the first clip, with a picture on the monitor
+  loadSentences().then(() => { drawTimeline(); drawInspector(); syncSnapState(); });  // ticks + edge verdicts arrive a beat later
   seek(0); fitFrame();
   // the stage is the authority on how big the monitor may be, and it changes when a panel folds or the window moves
   const stage = host.querySelector('.stage');
@@ -138,6 +166,7 @@ function draw() {
   $('#bsplit').onclick = split; $('#bdup').onclick = duplicate; $('#bdel').onclick = remove;
   $('#baicuts').onclick = aiCuts;
   $('#bsnap').onchange = (e) => { SNAP = e.target.checked; };
+  syncSnapState();
   $('#zin').onclick = () => zoom(1.5); $('#zout').onclick = () => zoom(1 / 1.5); $('#zfit').onclick = fitZoom;
   $('#zoom').oninput = (e) => { PX = Math.max(2, Math.min(400, 2 * Math.pow(200, +e.target.value / 100))); drawTimeline(); };
   $('#tlscroll').addEventListener('wheel', (e) => { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); zoom(e.deltaY < 0 ? 1.12 : 1 / 1.12); }, { passive: false });
@@ -168,9 +197,23 @@ async function openSource(id, keep) {
   const sentRows = (tr.ready ? tr.sentences : []).map((s) => `<div class="srcitem sent" data-a="${s.start}" data-b="${s.end}" data-l="${attr(s.text.slice(0, 50))}">
       <span class="mono muted body-s">${ts(s.start)}</span><span class="grow ellipsis" title="${attr(s.text)}">${esc(s.text)}</span>
       <span class="muted body-s mono">${(s.end - s.start).toFixed(1)}s</span><button class="btn xs tonal">+</button></div>`).join('');
-  box.innerHTML = `${cutRows ? `<div class="overline">Proposed by the AI</div>${cutRows}` : ''}
-    ${sentRows ? `<div class="overline" style="margin-top:10px">Sentences${tr.ready ? '' : ''}</div><div class="sentscroll">${sentRows}</div>`
-      : '<div class="muted body-s" style="padding:6px 0">No measured sentences for this video yet.</div>'}`;
+  SENT[SRC] = tr;
+  const approx = cuts.timing === 'estimated' && cuts.timing_note
+    ? `<div class="edgenote warn" style="margin:0 0 8px">${icon('info', 's')}<div>${esc(cuts.timing_note)}</div></div>` : '';
+  const noSent = tr.status === 'running'
+    ? `<div class="edgenote" style="margin-top:10px"><span class="spin"></span><div>Measuring word timings…</div></div>`
+    : `<div class="edgenote warn" style="margin-top:10px">${icon('info', 's')}<div>
+         ${tr.status === 'failed' ? `Word timings failed: ${esc(tr.error || 'unknown')}` : 'No measured sentences yet, so edges cannot snap to real speech.'}
+         ${tr.provider ? '<button class="btn xs tonal" id="srcmeasure" style="margin-top:6px">Measure now</button>'
+      : '<div class="muted body-s" style="margin-top:4px">Set TRANSCRIBE_PROVIDER=whisper to enable this.</div>'}</div></div>`;
+  box.innerHTML = `${approx}${cutRows ? `<div class="overline">Proposed by the AI</div>${cutRows}` : ''}
+    ${sentRows ? `<div class="overline" style="margin-top:10px">Sentences <span class="muted">${tr.sentences.length}</span></div><div class="sentscroll">${sentRows}</div>` : noSent}`;
+  const sm = box.querySelector('#srcmeasure');
+  if (sm) sm.onclick = async () => {
+    sm.disabled = true; sm.innerHTML = '<span class="spin"></span> measuring…';
+    try { await post(`/jobs/${SRC}/transcript?force=false`); waitForSentences(SRC); }
+    catch (e) { toast(e.message, true); sm.disabled = false; }
+  };
   box.querySelectorAll('.srcitem').forEach((n) => {
     n.onclick = () => addClip(SRC, +n.dataset.a, +n.dataset.b, n.dataset.l);
     n.addEventListener('pointerdown', (e) => {          // or drag it onto the timeline, where you want it
@@ -228,6 +271,20 @@ function fitFrame() {
 }
 function fitZoom() { const w = $('#tlscroll') ? $('#tlscroll').clientWidth - 28 : 900; PX = Math.max(2, w / Math.max(4, total())); syncZoom(); drawTimeline(); }
 
+/** Sentence ends inside the clip as ticks, plus a flag on an edge that cuts a sentence in half - so the
+ *  edit shows you where speech actually finishes instead of asking you to trust it. */
+function sentenceMarks(c) {
+  const e = edgeInfo(c);
+  if (!e) return '';
+  const ticks = e.ends.filter((x) => x > c.in_seconds + 0.05 && x < c.out_seconds - 0.05)
+    .map((x) => `<i class="snt" style="left:${(x - c.in_seconds) * PX}px"></i>`).join('');
+  const bad = [];
+  if (e.inCuts) bad.push('<i class="cutmark l" title="starts in the middle of a sentence"></i>');
+  if (e.outCuts) bad.push(`<i class="cutmark r" title="ends ${(e.outCuts.end - c.out_seconds).toFixed(2)}s before the speaker finishes"></i>`);
+  else if (e.openEnd) bad.push('<i class="cutmark r open" title="ends on a conjunction - sounds interrupted"></i>');
+  return ticks + bad.join('');
+}
+
 function drawTimeline() {
   if (!TL || !$('#trkv')) return;
   const secs = total(), w = Math.max(200, secs * PX);
@@ -241,12 +298,12 @@ function drawTimeline() {
   $('#ruler').innerHTML = marks;
 
   const st = starts();
-  $('#trkv').innerHTML = TL.clips.map((c, i) => `<div class="cl${c.kind !== 'clip' ? ' still' : ''}${c.id === SEL ? ' sel' : ''}" data-id="${attr(c.id)}" data-i="${i}"
+  $('#trkv').innerHTML = TL.clips.map((c, i) => `<div class="cl${c.kind !== 'clip' ? ' still' : ''}${c.id === SEL ? ' sel' : ''}${edgeProblem(c) ? ' cuts' : ''}" data-id="${attr(c.id)}" data-i="${i}"
       style="left:${st[i] * PX}px;width:${Math.max(8, c.seconds * PX - 2)}px;--tone:${colourOf(c.job_id)};--thumb:url('/api/v1/jobs/${esc(c.job_id)}/frame?at=${(c.in_seconds + 0.4).toFixed(2)}&width=150')"
       title="${attr((c.label || 'clip') + '\n' + ts(c.in_seconds) + ' → ' + ts(c.out_seconds))}">
       <span class="h l" data-edge="in"></span>
       <span class="body"><b>${esc(c.label || 'clip')}</b><span class="k">${c.seconds.toFixed(1)}s${c.mute ? ' · muted' : ''}${(c.track || []).length ? ' · tracked' : ''}</span></span>
-      <span class="h r" data-edge="out"></span></div>`).join('');
+      <span class="h r" data-edge="out"></span>${sentenceMarks(c)}</div>`).join('');
   const lg = $('#legend');
   if (lg) lg.innerHTML = TL.jobs.length > 1 ? TL.jobs.map((j) => {
     const name = ((JOBS.find((x) => x.id === j) || {}).source || {}).name || j;
@@ -325,7 +382,7 @@ function bindTrack() {
       }
       mode = null; dropAt = null; endDrag();
       recompute(); drawTimeline();
-      if (SNAP && base && (base.in_seconds !== c.in_seconds || base.out_seconds !== c.out_seconds)) snapClip(c);
+      if (SNAP && base && (base.in_seconds !== c.in_seconds || base.out_seconds !== c.out_seconds)) snapClip(c, { loud: false });
       save(); drawInspector();
     };
     n.addEventListener('pointerup', finish);
@@ -357,12 +414,50 @@ function bindTrack() {
   });
 }
 
-async function snapClip(c) {
+/** Poll until the measurement lands, then redraw: the ticks and the edge verdict appear on their own. */
+function waitForSentences(jobId, tries = 40) {
+  const again = async () => {
+    const t = await sentencesFor(jobId, true);
+    if (t.ready) { drawTimeline(); drawInspector(); drawSources(); toast(`${t.sentences.length} sentences measured`); return; }
+    if (t.status === 'failed') { drawInspector(); toast(`Word timings failed: ${t.error || 'unknown'}`, true); return; }
+    if (tries > 0) setTimeout(() => waitForSentences(jobId, tries - 1), 1500);
+  };
+  setTimeout(again, 1500);
+}
+
+/** The snap toggle claimed edges stick to sentence ends even with no word timings to stick to. */
+function syncSnapState() {
+  const box = $('#bsnap');
+  if (!box || !TL) return;
+  const measured = (TL.jobs || []).filter((j) => SENT[j] && SENT[j].ready).length;
+  const label = box.closest('label');
+  const ok = measured > 0;
+  if (label) {
+    label.classList.toggle('inert', !ok);
+    label.title = ok
+      ? `edges stick to clip boundaries and the measured sentence ends of ${measured} source${measured === 1 ? '' : 's'}`
+      : 'edges stick to clip boundaries only - no source has word timings yet, so there are no sentence ends to snap to';
+  }
+}
+
+async function snapClip(c, { loud = true } = {}) {
   if (!c || !c.job_id) return;
+  let d;
   try {
-    const d = await api(`/jobs/${c.job_id}/snap?cut_in=${c.in_seconds}&cut_out=${c.out_seconds}`);
-    if (d.snapped) { c.in_seconds = d.cut_in; c.out_seconds = d.cut_out; recompute(); drawTimeline(); save(); }
-  } catch { /* no transcript: leave it where the editor put it */ }
+    d = await api(`/jobs/${c.job_id}/snap?cut_in=${c.in_seconds}&cut_out=${c.out_seconds}`);
+  } catch (e) {
+    if (loud) toast(e.message, true);
+    return;
+  }
+  if (!d.snapped) {                     // no word timings: say so instead of pretending the edit was adjusted
+    if (loud) toast('No word timings for this video yet - measure them to snap to real sentence ends', true);
+    drawInspector();
+    return;
+  }
+  const moved = Math.abs(d.cut_in - c.in_seconds) + Math.abs(d.cut_out - c.out_seconds);
+  c.in_seconds = d.cut_in; c.out_seconds = d.cut_out;
+  recompute(); drawTimeline(); drawInspector(); save();
+  if (loud) toast(moved < 0.01 ? 'Already on the sentence boundaries' : `Edges moved to the sentence boundaries (${moved.toFixed(2)}s)`);
 }
 
 function recompute() { TL.clips.forEach((c) => { c.seconds = Math.round((c.out_seconds - c.in_seconds) * 1000) / 1000; }); }
@@ -462,6 +557,30 @@ function bindKeys() {
   document.addEventListener('keydown', keys);
 }
 
+/** Says in words what the ticks show, and offers the one fix that matters: let the speaker finish. */
+function edgeNotice(c) {
+  const t = SENT[c.job_id];
+  if (!t || !t.ready) {
+    const why = t && t.status === 'running' ? 'Word timings are being measured - reopen in a moment.'
+      : t && t.status === 'failed' ? `Word timings failed: ${esc(t.error || 'unknown')}`
+        : !t || !t.provider ? 'Word timings are off, so edges cannot be checked against real speech.'
+          : 'This video has no word timings yet, so edges are not checked against real speech.';
+    const can = t && t.provider && t.status !== 'running';
+    return `<div class="edgenote warn" style="margin-top:10px">${icon('info', 's')}<div>${why}
+      ${can ? '<button class="btn xs tonal" id="imeasure" style="margin-top:6px">Measure now</button>' : ''}</div></div>`;
+  }
+  const e = edgeInfo(c);
+  if (!e) return '';
+  const bad = [];
+  if (e.outCuts) bad.push(`Ends <b>${(e.outCuts.end - c.out_seconds).toFixed(2)}s</b> before the speaker finishes &ldquo;${esc(e.outCuts.text.slice(-44))}&rdquo;`);
+  else if (e.openEnd) bad.push('Ends on a conjunction, so it sounds interrupted');
+  if (e.inCuts) bad.push('Starts part-way through a sentence');
+  if (e.filler) bad.push('Starts on a filler word');
+  if (!bad.length) return `<div class="edgenote ok" style="margin-top:10px">${icon('check', 's')}<div>Both edges sit on sentence boundaries.</div></div>`;
+  return `<div class="edgenote warn" style="margin-top:10px">${icon('warn', 's')}<div>${bad.map((b) => `<div>${b}</div>`).join('')}
+    <button class="btn xs filled" id="ifixedge" style="margin-top:7px">Let the speaker finish</button></div></div>`;
+}
+
 // ---------------------------------------------------------------- inspector
 function drawInspector() {
   const el = $('#inspbody'); if (!el) return;
@@ -474,6 +593,7 @@ function drawInspector() {
     <div class="field"><label>Text on screen</label><input type="text" id="itext" value="${attr(c.text || '')}" placeholder="a few words"></div>
     <div class="row gap4" style="margin-top:10px"><span class="muted body-s" style="width:28px">IN</span>${[-1, -0.2, 0.2, 1].map((d) => `<button class="btn xs tonal" data-n="in" data-d="${d}">${d > 0 ? '+' : ''}${d}</button>`).join('')}</div>
     <div class="row gap4" style="margin-top:4px"><span class="muted body-s" style="width:28px">OUT</span>${[-1, -0.2, 0.2, 1].map((d) => `<button class="btn xs tonal" data-n="out" data-d="${d}">${d > 0 ? '+' : ''}${d}</button>`).join('')}</div>
+    ${edgeNotice(c)}
     <button class="btn xs" id="isnap" style="margin-top:8px">${icon('spark', 's')}snap to the sentence</button>
     <div class="overline" style="margin-top:16px">Framing</div>
     <div class="seg" id="ifit" style="margin-top:6px">${[['auto', 'Auto'], ['cover', 'Fill'], ['contain', 'Fit']].map(([k, l]) => `<label><input type="radio" name="ifit" value="${k}" ${(c.fit || 'auto') === k ? 'checked' : ''}>${l}</label>`).join('')}</div>
@@ -491,6 +611,12 @@ function drawInspector() {
     recompute(); drawTimeline(); drawInspector(); save();
   });
   $('#isnap').onclick = () => snapClip(c);
+  const fx = $('#ifixedge'); if (fx) fx.onclick = () => snapClip(c);
+  const ms = $('#imeasure'); if (ms) ms.onclick = async () => {
+    ms.disabled = true; ms.innerHTML = '<span class="spin"></span> measuring…';
+    try { await post(`/jobs/${c.job_id}/transcript?force=false`); toast('Measuring word timings - this takes a moment'); waitForSentences(c.job_id); }
+    catch (e) { toast(e.message, true); ms.disabled = false; }
+  };
   $$('input[name=ifit]').forEach((r) => r.onchange = () => { c.fit = r.value === 'auto' ? null : r.value; save(); });
   $('#ifocus').oninput = (e) => { c.focus_x = +e.target.value / 100; save(); };
   $('#imute').onchange = (e) => { c.mute = e.target.checked; drawTimeline(); save(); };
